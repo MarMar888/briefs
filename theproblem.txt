@@ -1,0 +1,14 @@
+⏺ The core pain Rob described was prospecting by hand, with no systematic way to detect new leads. Key specifics:
+
+  - He relies entirely on trade shows, buying groups, and associations because he doesn't have the time or tools for systematic outreach — his words:
+  "it's been a better use of my time to go to the trade shows...versus a mass campaign."
+  - His aspiration: "If I can catch them before they've made a decision..." — meaning he wants to identify new outdoor sports businesses (new ski
+  shops, outfitters, etc.) before they've already locked in an insurance provider.
+  - He also confirmed he paid for outside phone prospectors in the past — which is a real prior spending signal, though the amount and ROI weren't
+  followed up on.
+  - There's also a database deduplication problem: his client database has parent company vs. DBA name mismatches, so scrubbing prospect lists against
+   existing clients is unreliable — risk of accidentally cold-calling a current client.
+
+  The summary flags the prospecting interest as still hypothetical (no have-they-searched test was run), but the prior spend on phone prospectors is
+  the strongest signal that the pain is real. The idea is essentially: monitor for new businesses entering his niche (outdoor sports retailers,
+  guides, etc.) and surface them to him before they've already bought coverage.

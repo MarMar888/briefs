@@ -1,0 +1,2 @@
+⏺ The idea was lead sourcing monitoring for insurance brokerages — essentially a tool that surfaces or monitors new business leads specifically for   
+  insurance brokerage companies. It's listed under "Specific ideas (based on problems solved)" alongside the general lead sourcing pattern for SMBs.
