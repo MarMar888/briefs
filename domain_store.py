@@ -251,7 +251,7 @@ def update_domain(domain: str, **fields) -> None:
     with closing(_db()) as conn:
         conn.execute(
             f"UPDATE domains SET {set_clause} WHERE domain = ?",
-            [*fields.values(), domain],
+            (*fields.values(), domain),
         )
         conn.commit()
 
