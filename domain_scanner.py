@@ -1,7 +1,7 @@
 """
 Scans newly registered domains for outdoor retailers.
 
-Source: WhoisDS daily NRD lists (~70k domains/day, free, no API key).
+Source: domains-monitor.com daily NRD lists.
 USA filter: local DNS resolution + ip-api.com batch IP geolocation.
 State: SQLite queue in domain_leads.sqlite3.
 
@@ -124,6 +124,56 @@ OUTDOOR_PROPER_NOUNS = {
     "salomon",
     "burton",
     "rossignol",
+    "rapala",
+    "shimano",
+    "fenwick",
+    "sage",
+    "redington",
+    "gloomis",
+    "stcroix",
+    "vortex",
+    "leupold",
+    "browning",
+    "benelli",
+    "mathews",
+    "hoyt",
+    "pse",
+    "yeti",
+    "pelican",
+    "hobie",
+    "nrs",
+    "yakima",
+    "thule",
+    "kuat",
+    "deuter",
+    "kelty",
+    "thermarest",
+    "msr",
+    "nemo",
+    "hydroflask",
+    "smartwool",
+    "icebreaker",
+    "prana",
+    "chaco",
+    "teva",
+    "keen",
+    "merrell",
+    "danner",
+    "oboz",
+    "hoka",
+    "saucony",
+    "lasportiva",
+    "scarpa",
+    "petzl",
+    "edelrid",
+    "metolius",
+    "mammut",
+    "volkl",
+    "k2",
+    "armada",
+    "libtech",
+    "nitro",
+    "arbor",
 }
 
 
@@ -137,12 +187,9 @@ def _matches_keywords(domain: str) -> bool:
         return True
 
     for proper_noun in OUTDOOR_PROPER_NOUNS:
-        if (
-            compact == proper_noun
-            or compact.startswith(proper_noun)
-            or compact.endswith(proper_noun)
-            or compact.startswith(f"the{proper_noun}")
-        ):
+        if compact == proper_noun or compact.startswith(f"the{proper_noun}"):
+            return True
+        if len(proper_noun) >= 5 and (compact.startswith(proper_noun) or compact.endswith(proper_noun)):
             return True
 
     for part in parts:
@@ -300,6 +347,40 @@ def _fetch_domainkits_file_batches(path: str, dates: list[datetime]) -> list[tup
     return batches
 
 
+def _fetch_domainsmonitor_live() -> list[str]:
+    """Fetch today's newly registered domains from domains-monitor.com."""
+    token = os.environ.get("DOMAINS_MONITOR_TOKEN")
+    if not token:
+        print("[domain_scanner] DOMAINS_MONITOR_TOKEN is required for --domain-source domainsmonitor", flush=True)
+        return []
+
+    url = os.environ.get(
+        "DOMAINS_MONITOR_DAILY_URL",
+        f"https://domains-monitor.com/api/v1/{token}/get/dailyupdate/list/text/",
+    )
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=120)
+        resp.raise_for_status()
+        return _domains_from_bytes(resp.content, url)
+    except Exception as e:
+        print(f"[domain_scanner] domains-monitor daily fetch failed: {e}", flush=True)
+        return []
+
+
+def _fetch_domainsmonitor_backfill(local_file: str) -> list[str]:
+    """Read a downloaded domains-monitor text/zip/gz/csv file."""
+    path = Path(local_file).expanduser()
+    if not path.exists():
+        print(f"[domain_scanner] domains-monitor file does not exist: {path}", flush=True)
+        return []
+    if path.is_dir():
+        domains: list[str] = []
+        for file in sorted(p for p in path.iterdir() if p.is_file()):
+            domains.extend(_domains_from_bytes(file.read_bytes(), file.name))
+        return domains
+    return _domains_from_bytes(path.read_bytes(), path.name)
+
+
 def _resolve_domain(domain: str) -> str | None:
     try:
         infos = socket.getaddrinfo(domain, 443, type=socket.SOCK_STREAM)
@@ -406,6 +487,15 @@ def _check_domain(row: dict) -> dict:
     return {"row": row, "url": url, "pending_reason": None, "verdict": verdict}
 
 
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
 def _run_site_phase(filing_date: str) -> list[Filing]:
     due = domain_store.get_due(["site_pending"])
     if not due:
@@ -429,14 +519,33 @@ def _run_site_phase(filing_date: str) -> list[Filing]:
             prefix = f"[site {completed}/{total}] {domain}"
 
             if result["pending_reason"]:
-                print(f"{prefix} ⏳ pending — {result['pending_reason']}", flush=True)
-                domain_store.update_domain(domain, status="site_pending",
-                                           last_error=result["pending_reason"],
-                                           redirected_to=result.get("redirected_to", ""),
-                                           redirect_domain=result.get("redirect_domain", ""),
-                                           phone=result.get("phone", ""),
-                                           email=result.get("email", ""),
-                                           last_checked_at=now, attempt_count=count)
+                interval_days = 7 * count
+                next_check_dt = datetime.utcnow() + timedelta(days=interval_days)
+                expires_at = _parse_iso(row.get("expires_at"))
+
+                if expires_at and next_check_dt > expires_at:
+                    print(f"{prefix} ⏳ expired — {result['pending_reason']}", flush=True)
+                    domain_store.update_domain(domain, status="expired",
+                                               last_error=result["pending_reason"],
+                                               redirected_to=result.get("redirected_to", ""),
+                                               redirect_domain=result.get("redirect_domain", ""),
+                                               phone=result.get("phone", ""),
+                                               email=result.get("email", ""),
+                                               last_checked_at=now, attempt_count=count)
+                else:
+                    print(
+                        f"{prefix} ⏳ pending — {result['pending_reason']} "
+                        f"(retry in {interval_days}d)",
+                        flush=True,
+                    )
+                    domain_store.update_domain(domain, status="site_pending",
+                                               last_error=result["pending_reason"],
+                                               redirected_to=result.get("redirected_to", ""),
+                                               redirect_domain=result.get("redirect_domain", ""),
+                                               phone=result.get("phone", ""),
+                                               email=result.get("email", ""),
+                                               next_check_at=next_check_dt.isoformat(),
+                                               last_checked_at=now, attempt_count=count)
             elif result["verdict"]["match"]:
                 v = result["verdict"]
                 location    = v.get("location", "")
@@ -501,6 +610,7 @@ def scan_new_domains(
     defer_site_days: int = 0,
     source: str = "whoisds",
     domainkits_path: str | None = None,
+    domainsmonitor_path: str | None = None,
 ) -> list[Filing]:
     """
     Run the full domain pipeline and return Filing objects for newly matched domains.
@@ -510,10 +620,16 @@ def scan_new_domains(
         limit:          Max newly discovered domains to upsert from the NRD feed (0 = no limit).
         keyword_filter: If True, only process domains whose name contains an outdoor keyword.
         start_date:     YYYY-MM-DD to start from, pulling forward `days` days. Defaults to yesterday.
-        source:         NRD source: whoisds, domainkits, or domainkits-file.
+        source:         NRD source: domainsmonitor, domainsmonitor-file, whoisds,
+                        domainkits, or domainkits-file.
         domainkits_path: File or directory of DomainKits downloads for domainkits-file.
+        domainsmonitor_path: File or directory of domains-monitor downloads for domainsmonitor-file.
     """
     domain_store.init_db()
+    expired = domain_store.expire_stale()
+    if expired:
+        print(f"[domain_scanner] Expired {expired} stale tracked domains", flush=True)
+
     today = datetime.now()
 
     if start_date:
@@ -523,12 +639,22 @@ def scan_new_domains(
         dates = [today - timedelta(days=i) for i in range(1, days + 1)]
 
     # 1. Download/import + TLD/keyword filter
-    if source == "domainkits-file":
+    if source == "domainsmonitor-file":
+        path = domainsmonitor_path or domainkits_path
+        if not path:
+            print("[domain_scanner] --domainsmonitor-path is required with --domain-source domainsmonitor-file", flush=True)
+            batches = []
+        else:
+            batches = [(today.strftime("%Y-%m-%d"), _fetch_domainsmonitor_backfill(path))]
+    elif source == "domainkits-file":
         if not domainkits_path:
             print("[domain_scanner] --domainkits-path is required with --domain-source domainkits-file", flush=True)
             batches = []
         else:
             batches = _fetch_domainkits_file_batches(domainkits_path, dates)
+    elif source == "domainsmonitor":
+        print("[domain_scanner] Downloading daily NRD list from domains-monitor...", flush=True)
+        batches = [(today.strftime("%Y-%m-%d"), _fetch_domainsmonitor_live())]
     else:
         fetcher = _fetch_domainkits if source == "domainkits" else _fetch_whoisds
         batches = []
