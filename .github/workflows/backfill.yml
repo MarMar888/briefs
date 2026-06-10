@@ -38,6 +38,7 @@ jobs:
           python run.py \
             --domains-only \
             --skip-domain-import \
+            --keywords \
             --geo-limit "$GEO_LIMIT" \
             --site-limit "$LIMIT"
         env:
