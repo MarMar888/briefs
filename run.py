@@ -27,6 +27,8 @@ def main():
                         help="Max new domains to queue after TLD/keyword filtering (default: 3000; 0 = no limit)")
     parser.add_argument("--keywords", action="store_true",
                         help="Pre-filter domains by outdoor keywords before geo/scrape (much higher signal-to-noise)")
+    parser.add_argument("--keyword-workers", type=int, default=0,
+                        help="Processes for keyword filtering (default: auto for --domain-file, 1 otherwise; 0 = auto)")
     parser.add_argument("--start-date", type=str, default=None,
                         help="Start date for NRD pulls in YYYY-MM-DD format; pulls --days days forward from this date (default: yesterday)")
     parser.add_argument("--defer-site-days", type=int, default=0,
@@ -41,7 +43,24 @@ def main():
                         help="File or directory of DomainKits .txt/.csv/.gz/.zip downloads when --domain-source domainkits-file")
     parser.add_argument("--domainsmonitor-path", type=str, default=None,
                         help="File or directory of domains-monitor downloads when --domain-source domainsmonitor-file")
+    parser.add_argument("--domain-file", type=str, default=None,
+                        help="Plain-text file of domains (one per line); shorthand for --domains-only --domain-source domainkits-file --domainkits-path <file> --keywords --domain-limit 0")
+    parser.add_argument("--skip-domain-import", action="store_true",
+                        help="For --domains/--domains-only, skip source import/filtering and resume queued domains already in SQLite")
+    parser.add_argument("--skip-geo", action="store_true",
+                        help="Skip geo phase and go straight to site classification")
     args = parser.parse_args()
+
+    if args.domain_file:
+        args.domains_only = True
+        args.domain_source = "domainkits-file"
+        args.domainkits_path = args.domain_file
+        args.keywords = True
+        if args.domain_limit == 3000:
+            args.domain_limit = 0
+
+    if args.keyword_workers == 0:
+        args.keyword_workers = max(1, min((os.cpu_count() or 2) - 1, 8)) if args.domain_file else 1
 
     filings = []
 
@@ -69,11 +88,15 @@ def main():
                 source=args.domain_source,
                 domainkits_path=args.domainkits_path,
                 domainsmonitor_path=args.domainsmonitor_path,
+                keyword_workers=args.keyword_workers,
+                skip_import=args.skip_domain_import,
+                skip_geo=args.skip_geo,
             )
             domain_store.finish_run(run_id, **scan_stats)
         except Exception as exc:
             domain_store.finish_run(run_id, matched=0, downloaded=0, inserted=0, expired=0, error=str(exc))
             raise
+
 
         print(f"[run] {len(domain_filings)} new USA-hosted domains queued for classification")
         filings.extend(domain_filings)
