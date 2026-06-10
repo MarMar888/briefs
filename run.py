@@ -27,6 +27,8 @@ def main():
                         help="Max new domains to queue after TLD/keyword filtering (default: 3000; 0 = no limit)")
     parser.add_argument("--keywords", action="store_true",
                         help="Pre-filter domains by outdoor keywords before geo/scrape (much higher signal-to-noise)")
+    parser.add_argument("--keyword-workers", type=int, default=0,
+                        help="Processes for keyword filtering (default: auto for --domain-file, 1 otherwise; 0 = auto)")
     parser.add_argument("--start-date", type=str, default=None,
                         help="Start date for NRD pulls in YYYY-MM-DD format; pulls --days days forward from this date (default: yesterday)")
     parser.add_argument("--defer-site-days", type=int, default=0,
@@ -41,7 +43,26 @@ def main():
                         help="File or directory of DomainKits .txt/.csv/.gz/.zip downloads when --domain-source domainkits-file")
     parser.add_argument("--domainsmonitor-path", type=str, default=None,
                         help="File or directory of domains-monitor downloads when --domain-source domainsmonitor-file")
+    parser.add_argument("--domain-file", type=str, default=None,
+                        help="Plain-text file of domains (one per line); shorthand for --domains-only --domain-source domainkits-file --domainkits-path <file> --keywords --domain-limit 0")
+    parser.add_argument("--skip-domain-import", action="store_true",
+                        help="For --domains/--domains-only, skip source import/filtering and resume queued domains already in SQLite")
+    parser.add_argument("--skip-geo", action="store_true",
+                        help="Skip geo phase and go straight to site classification")
+    parser.add_argument("--site-limit", type=int, default=0,
+                        help="Max site_pending domains to classify per run (0 = no limit); use for batched backfill")
     args = parser.parse_args()
+
+    if args.domain_file:
+        args.domains_only = True
+        args.domain_source = "domainkits-file"
+        args.domainkits_path = args.domain_file
+        args.keywords = True
+        if args.domain_limit == 3000:
+            args.domain_limit = 0
+
+    if args.keyword_workers == 0:
+        args.keyword_workers = max(1, min((os.cpu_count() or 2) - 1, 8)) if args.domain_file else 1
 
     filings = []
 
@@ -52,23 +73,36 @@ def main():
         filings.extend(sos_filings)
 
     if args.domains or args.domains_only:
+        import domain_store
         from domain_scanner import scan_new_domains
+        from email_alerts import send_match_alerts
+
+        domain_store.init_db()
+        run_id = domain_store.start_run(source=args.domain_source)
         print(f"[run] Scanning newly registered domains from {args.domain_source} (last {args.days} days, limit {args.domain_limit})...")
-        domain_filings = scan_new_domains(
-            days=args.days,
-            limit=args.domain_limit,
-            keyword_filter=args.keywords,
-            start_date=args.start_date,
-            defer_site_days=args.defer_site_days,
-            source=args.domain_source,
-            domainkits_path=args.domainkits_path,
-            domainsmonitor_path=args.domainsmonitor_path,
-        )
+        try:
+            domain_filings, scan_stats = scan_new_domains(
+                days=args.days,
+                limit=args.domain_limit,
+                keyword_filter=args.keywords,
+                start_date=args.start_date,
+                defer_site_days=args.defer_site_days,
+                source=args.domain_source,
+                domainkits_path=args.domainkits_path,
+                domainsmonitor_path=args.domainsmonitor_path,
+                keyword_workers=args.keyword_workers,
+                skip_import=args.skip_domain_import,
+                skip_geo=args.skip_geo,
+                site_limit=args.site_limit,
+            )
+            domain_store.finish_run(run_id, **scan_stats)
+        except Exception as exc:
+            domain_store.finish_run(run_id, matched=0, downloaded=0, inserted=0, expired=0, error=str(exc))
+            raise
+
+
         print(f"[run] {len(domain_filings)} new USA-hosted domains queued for classification")
         filings.extend(domain_filings)
-
-        import domain_store
-        from email_alerts import send_match_alerts
 
         unalerted = domain_store.get_unalerted_matches()
         if unalerted and send_match_alerts(unalerted):
