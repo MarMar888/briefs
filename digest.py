@@ -15,12 +15,23 @@ class Result:
     website: str
     match: bool
     reason: str
+    score: int | None = None
+    score_category: str = ""
+    redirected_to: str = ""
+    redirect_domain: str = ""
+    phone: str = ""
+    email: str = ""
+    ecom_only: bool = False
 
 
 def to_csv(results: list[Result]) -> str:
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Business Name", "City", "Filing Date", "Website", "Match", "Reason"])
+    writer.writerow([
+        "Business Name", "City", "Filing Date", "Website", "Match",
+        "Score", "Score Category", "Ecom Only", "Redirected To", "Redirect Domain",
+        "Phone", "Email", "Reason",
+    ])
     for r in results:
         writer.writerow([
             r.name,
@@ -28,6 +39,13 @@ def to_csv(results: list[Result]) -> str:
             r.filing_date,
             r.website or "—",
             "YES" if r.match else "NO",
+            "" if r.score is None else r.score,
+            r.score_category,
+            "YES" if r.ecom_only else "",
+            r.redirected_to,
+            r.redirect_domain,
+            r.phone,
+            r.email,
             r.reason,
         ])
     return output.getvalue()

@@ -1,6 +1,7 @@
 """
 MN Outdoor Sports Lead Monitor
 Usage: python run.py --days 7 [--output digest.csv] [--all]
+       python run.py --domains --days 7 [--domain-limit 3000] [--output digest.csv]
 """
 
 import argparse
@@ -11,27 +12,78 @@ load_dotenv()
 
 from fetcher import fetch_new_filings
 from discoverer import find_website
-from classifier import classify
+from classifier import classify, classify_domain
 from digest import Result, to_csv, to_text
 
 
 def main():
-    parser = argparse.ArgumentParser(description="MN outdoor sports lead monitor")
+    parser = argparse.ArgumentParser(description="Outdoor sports lead monitor")
     parser.add_argument("--days", type=int, default=7, help="Look back N days (default: 7)")
     parser.add_argument("--output", type=str, help="Write CSV to this file instead of stdout")
     parser.add_argument("--all", action="store_true", help="Show all businesses, not just matches")
+    parser.add_argument("--domains", action="store_true", help="Scan newly registered domains (in addition to MN SOS)")
+    parser.add_argument("--domains-only", action="store_true", help="Skip MN SOS, only scan new domains")
+    parser.add_argument("--domain-limit", type=int, default=3000,
+                        help="Max new domains to queue after TLD/keyword filtering (default: 3000; 0 = no limit)")
+    parser.add_argument("--keywords", action="store_true",
+                        help="Pre-filter domains by outdoor keywords before geo/scrape (much higher signal-to-noise)")
+    parser.add_argument("--start-date", type=str, default=None,
+                        help="Start date for NRD pulls in YYYY-MM-DD format; pulls --days days forward from this date (default: yesterday)")
+    parser.add_argument("--defer-site-days", type=int, default=0,
+                        help="Delay site classification N days after geo resolves (e.g. 15 gives new sites time to go live)")
+    parser.add_argument("--domain-source", choices=["whoisds", "domainkits", "domainkits-file"], default="whoisds",
+                        help="Newly registered domain source (default: whoisds)")
+    parser.add_argument("--domainkits-path", type=str, default=None,
+                        help="File or directory of DomainKits .txt/.csv/.gz/.zip downloads when --domain-source domainkits-file")
     args = parser.parse_args()
 
-    print(f"[run] Fetching MN SOS filings from the last {args.days} days...")
-    filings = fetch_new_filings(days=args.days)
-    print(f"[run] Found {len(filings)} new filings")
+    filings = []
+
+    if not args.domains_only:
+        print(f"[run] Fetching MN SOS filings from the last {args.days} days...")
+        sos_filings = fetch_new_filings(days=args.days)
+        print(f"[run] Found {len(sos_filings)} new SOS filings")
+        filings.extend(sos_filings)
+
+    if args.domains or args.domains_only:
+        from domain_scanner import scan_new_domains
+        print(f"[run] Scanning newly registered domains from {args.domain_source} (last {args.days} days, limit {args.domain_limit})...")
+        domain_filings = scan_new_domains(
+            days=args.days,
+            limit=args.domain_limit,
+            keyword_filter=args.keywords,
+            start_date=args.start_date,
+            defer_site_days=args.defer_site_days,
+            source=args.domain_source,
+            domainkits_path=args.domainkits_path,
+        )
+        print(f"[run] {len(domain_filings)} new USA-hosted domains queued for classification")
+        filings.extend(domain_filings)
 
     results = []
     for i, filing in enumerate(filings, 1):
-        print(f"[run] {i}/{len(filings)} {filing.name} ({filing.city})")
+        print(f"[run] {i}/{len(filings)} {filing.name} ({filing.city or 'domain'})", flush=True)
 
-        website = find_website(filing.name, filing.city)
-        verdict = classify(filing.name, filing.city, website)
+        if filing.verdict is not None:
+            # Pre-classified by domain scanner (already went through validate_site + LLM)
+            verdict = filing.verdict
+            website = filing.website
+        elif filing.website:
+            # Domain-sourced lead with a URL but not yet classified
+            from classifier import validate_site
+            site = validate_site(filing.website)
+            if site["pending_reason"]:
+                verdict = {"match": False, "reason": f"site pending: {site['pending_reason']}"}
+            else:
+                verdict = classify_domain(filing.name, site["content"])
+            verdict["redirected_to"] = site.get("redirected_to", "")
+            verdict["redirect_domain"] = site.get("redirect_domain", "")
+            verdict["phone"] = site.get("phone", "")
+            verdict["email"] = site.get("email", "")
+            website = filing.website
+        else:
+            website = find_website(filing.name, filing.city)
+            verdict = classify(filing.name, filing.city, website)
 
         results.append(Result(
             name=filing.name,
@@ -40,6 +92,13 @@ def main():
             website=website or "",
             match=verdict["match"],
             reason=verdict["reason"],
+            score=verdict.get("score"),
+            score_category=verdict.get("score_category", ""),
+            redirected_to=verdict.get("redirected_to", filing.redirected_to),
+            redirect_domain=verdict.get("redirect_domain", filing.redirect_domain),
+            phone=verdict.get("phone", filing.phone),
+            email=verdict.get("email", filing.email),
+            ecom_only=verdict.get("ecom_only", False),
         ))
 
     if args.output:
