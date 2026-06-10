@@ -1,0 +1,39 @@
+name: Enrich Matched Domains
+
+on:
+  schedule:
+    # Runs at 9 AM UTC daily — 2 hours after the daily pipeline
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Max domains to enrich this run (0 = no limit)"
+        required: false
+        default: "0"
+
+jobs:
+  enrich:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Enrich matched domains
+        run: |
+          LIMIT="${{ github.event.inputs.limit || '0' }}"
+          echo "[enrich] Running enrichment, limit=$LIMIT"
+          python enricher.py --limit "$LIMIT"
+        env:
+          DOMAIN_DB_PATH: ${{ secrets.TURSO_DB_URL }}
+          TURSO_DB_URL: ${{ secrets.TURSO_DB_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
