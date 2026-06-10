@@ -20,7 +20,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run domain pipeline
-        run: python run.py --domains-only --domain-source domainsmonitor --keywords --site-limit 500
+        run: python run.py --domains-only --domain-source domainsmonitor --keywords --site-limit 200
         env:
           DOMAIN_DB_PATH: ${{ secrets.TURSO_DB_URL }}
           TURSO_DB_URL: ${{ secrets.TURSO_DB_URL }}
@@ -31,3 +31,4 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
           ALERT_FROM: ${{ secrets.ALERT_FROM }}
+          FIRECRAWL_TIMEOUT_SECONDS: "15"
