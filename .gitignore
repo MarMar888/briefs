@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.pyc
+
+# runtime DB and sidecar files
+domain_leads.sqlite3
+domain_leads.sqlite3-shm
+domain_leads.sqlite3-wal
+
+# generated outputs
+digest.csv
+seen_domains.json
+domainkits-nrds/
+.context/nrd_archive/
+
+# env
+.env
+
+# OS / editor junk
+.DS_Store
+~$*

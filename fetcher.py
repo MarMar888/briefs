@@ -39,6 +39,12 @@ class Filing:
     state: str = "MN"
     filing_date: str = ""
     entity_type: str = ""
+    website: str = ""  # pre-known URL (domain leads); skips SerpAPI discovery when set
+    verdict: dict | None = None  # pre-classified by domain scanner; skips re-classification
+    redirected_to: str = ""
+    redirect_domain: str = ""
+    phone: str = ""
+    email: str = ""
 
 
 def _load_cache() -> dict[str, str]:
