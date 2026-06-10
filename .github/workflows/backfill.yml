@@ -10,6 +10,10 @@ on:
         description: "Max domains to classify this run (0 = no limit)"
         required: false
         default: "1000"
+      geo_limit:
+        description: "Max new/geo_pending domains to geo-check this run (0 = no limit)"
+        required: false
+        default: "0"
 
 jobs:
   backfill:
@@ -26,14 +30,15 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run site classification batch
+      - name: Run geo + site classification batch
         run: |
           LIMIT="${{ github.event.inputs.site_limit || '1000' }}"
-          echo "[backfill] Running site classification, site-limit=$LIMIT"
+          GEO_LIMIT="${{ github.event.inputs.geo_limit || '0' }}"
+          echo "[backfill] Running geo + site classification, geo-limit=$GEO_LIMIT, site-limit=$LIMIT"
           python run.py \
             --domains-only \
             --skip-domain-import \
-            --skip-geo \
+            --geo-limit "$GEO_LIMIT" \
             --site-limit "$LIMIT"
         env:
           DOMAIN_DB_PATH: ${{ secrets.TURSO_DB_URL }}

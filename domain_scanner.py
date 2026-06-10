@@ -517,10 +517,12 @@ def _geolocate_ips(ips: list[str]) -> dict[str, str]:
     return country_by_ip
 
 
-def _run_geo_phase(defer_site_days: int = 0) -> None:
+def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0) -> None:
     due = domain_store.get_due(["new", "geo_pending"])
     if not due:
         return
+    if geo_limit > 0:
+        due = due[:geo_limit]
     print(f"[domain_scanner] Geo phase: {len(due)} domains", flush=True)
 
     ip_by_domain = _resolve_domains([r["domain"] for r in due])
@@ -713,6 +715,7 @@ def scan_new_domains(
     skip_import: bool = False,
     skip_geo: bool = False,
     site_limit: int = 0,
+    geo_limit: int = 0,
 ) -> tuple[list[Filing], dict]:
     """
     Run the full domain pipeline and return Filing objects for newly matched domains.
@@ -808,7 +811,7 @@ def scan_new_domains(
     if skip_geo:
         print("[domain_scanner] Skipping geo phase", flush=True)
     else:
-        _run_geo_phase(defer_site_days=defer_site_days)
+        _run_geo_phase(defer_site_days=defer_site_days, geo_limit=geo_limit)
 
     # 4. Site phase: site_pending → matched or not_outdoor
     filing_date = today.strftime("%m/%d/%Y")

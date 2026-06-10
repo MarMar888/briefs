@@ -51,6 +51,8 @@ def main():
                         help="Skip geo phase and go straight to site classification")
     parser.add_argument("--site-limit", type=int, default=0,
                         help="Max site_pending domains to classify per run (0 = no limit); use for batched backfill")
+    parser.add_argument("--geo-limit", type=int, default=0,
+                        help="Max new/geo_pending domains to geo-check per run (0 = no limit)")
     args = parser.parse_args()
 
     if args.domain_file:
@@ -94,6 +96,7 @@ def main():
                 skip_import=args.skip_domain_import,
                 skip_geo=args.skip_geo,
                 site_limit=args.site_limit,
+                geo_limit=args.geo_limit,
             )
             domain_store.finish_run(run_id, **scan_stats)
         except Exception as exc:
