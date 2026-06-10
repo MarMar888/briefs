@@ -1,5 +1,5 @@
 import { and, avg, count, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
-import { db } from "./db";
+import { getDb } from "./db";
 import { domains, pipelineRuns } from "./schema";
 
 export type LeadFilters = {
@@ -10,6 +10,7 @@ export type LeadFilters = {
 };
 
 export async function getLeadStats() {
+  const db = getDb();
   const [matched] = await db
     .select({
       total: count(),
@@ -31,6 +32,7 @@ export async function getLeadStats() {
 }
 
 export async function getMatchedLeads(filters: LeadFilters) {
+  const db = getDb();
   const clauses = [eq(domains.status, "matched")];
 
   if (typeof filters.minScore === "number") {
@@ -61,7 +63,7 @@ export async function getMatchedLeads(filters: LeadFilters) {
 }
 
 export async function getPendingDomains() {
-  return db
+  return getDb()
     .select()
     .from(domains)
     .where(inArray(domains.status, ["new", "geo_pending", "site_pending"]))
@@ -70,7 +72,7 @@ export async function getPendingDomains() {
 }
 
 export async function getPipelineRuns(limit = 100) {
-  return db
+  return getDb()
     .select()
     .from(pipelineRuns)
     .orderBy(desc(pipelineRuns.startedAt))
@@ -78,7 +80,7 @@ export async function getPipelineRuns(limit = 100) {
 }
 
 export async function reviewDomain(domain: string, verdict: "approved" | "rejected", notes: string) {
-  await db
+  await getDb()
     .update(domains)
     .set({
       humanReviewed: true,
