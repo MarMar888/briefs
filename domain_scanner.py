@@ -588,7 +588,7 @@ def _parse_iso(value: str | None) -> datetime | None:
         return None
 
 
-def _run_site_phase(filing_date: str, site_limit: int = 0) -> list[Filing]:
+def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 30) -> list[Filing]:
     due = domain_store.get_due(["site_pending"])
     if not due:
         return []
@@ -663,6 +663,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0) -> list[Filing]:
                     "[ECOM]" if ecom_only else "",
                 ]))
                 print(f"{prefix} ✓ YES — {v['reason']}  {flags}", flush=True)
+                next_rescrape = (datetime.utcnow() + timedelta(days=rescrape_days)).isoformat()
                 domain_store.update_domain(domain, status="matched",
                                            classification_reason=v["reason"],
                                            location=location, established=established,
@@ -671,6 +672,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0) -> list[Filing]:
                                            redirected_to=redirected_to,
                                            redirect_domain=redirect_domain,
                                            phone=phone, email=email,
+                                           next_check_at=next_rescrape,
                                            classified_at=now, last_checked_at=now, attempt_count=count)
                 matched.append(Filing(
                     name=domain, city=location, filing_date=filing_date,
@@ -690,6 +692,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0) -> list[Filing]:
                 score_cat = v.get("score_category", "")
                 score_tag = f" [{score_cat}:{score}]" if score >= 40 else ""
                 print(f"{prefix} ✗ NO — {v['reason']}{score_tag}", flush=True)
+                next_rescrape = (datetime.utcnow() + timedelta(days=rescrape_days)).isoformat()
                 domain_store.update_domain(domain, status="not_outdoor",
                                            classification_reason=v["reason"],
                                            score=score, score_category=score_cat,
@@ -697,6 +700,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0) -> list[Filing]:
                                            redirect_domain=v.get("redirect_domain", ""),
                                            phone=v.get("phone", ""),
                                            email=v.get("email", ""),
+                                           next_check_at=next_rescrape,
                                            classified_at=now, last_checked_at=now, attempt_count=count)
 
     return matched
@@ -716,6 +720,7 @@ def scan_new_domains(
     skip_geo: bool = False,
     site_limit: int = 0,
     geo_limit: int = 0,
+    rescrape_days: int = 30,
 ) -> tuple[list[Filing], dict]:
     """
     Run the full domain pipeline and return Filing objects for newly matched domains.
@@ -736,6 +741,9 @@ def scan_new_domains(
     expired = domain_store.expire_stale()
     if expired:
         print(f"[domain_scanner] Expired {expired} stale tracked domains", flush=True)
+    requeued = domain_store.requeue_rescrapes()
+    if requeued:
+        print(f"[domain_scanner] Requeued {requeued} domains for rescrape", flush=True)
 
     today = datetime.now()
 
@@ -815,7 +823,7 @@ def scan_new_domains(
 
     # 4. Site phase: site_pending → matched or not_outdoor
     filing_date = today.strftime("%m/%d/%Y")
-    matched = _run_site_phase(filing_date, site_limit=site_limit)
+    matched = _run_site_phase(filing_date, site_limit=site_limit, rescrape_days=rescrape_days)
     print(f"[domain_scanner] {len(matched)} newly matched domains", flush=True)
 
     stats = {

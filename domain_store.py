@@ -197,6 +197,22 @@ def expire_stale() -> int:
         return cur.rowcount
 
 
+def requeue_rescrapes() -> int:
+    """Move matched/not_outdoor domains back to site_pending when their rescrape date is due.
+    Skips human-reviewed domains to preserve manual verdicts."""
+    now = datetime.utcnow().isoformat()
+    with closing(_db()) as conn:
+        cur = conn.execute(
+            "UPDATE domains SET status = 'site_pending', email_sent_at = NULL "
+            "WHERE status IN ('matched', 'not_outdoor') "
+            "AND next_check_at IS NOT NULL AND next_check_at <= ? "
+            "AND human_reviewed = 0",
+            (now,),
+        )
+        conn.commit()
+        return cur.rowcount
+
+
 def get_unalerted_matches() -> list[dict]:
     """Return matched domains that have not been included in a Resend alert."""
     with closing(_db()) as conn:
