@@ -74,6 +74,21 @@ WHERE status = 'matched'
 ORDER BY ecom_only ASC, score DESC, is_template ASC, classified_at DESC
 """
 
+_RUNS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at     TEXT NOT NULL,
+    finished_at    TEXT,
+    source         TEXT,
+    status         TEXT NOT NULL DEFAULT 'running',
+    downloaded     INTEGER,
+    inserted       INTEGER,
+    matched        INTEGER,
+    expired        INTEGER,
+    error          TEXT
+)
+"""
+
 _MIGRATIONS = [
     "ALTER TABLE domains ADD COLUMN location TEXT",
     "ALTER TABLE domains ADD COLUMN established TEXT",
@@ -114,7 +129,7 @@ def _db():
 def init_db() -> None:
     with closing(_db()) as conn:
         conn.execute(_SCHEMA)
-        # Run any migrations that haven't been applied yet
+        conn.execute(_RUNS_SCHEMA)
         for sql in _MIGRATIONS:
             try:
                 conn.execute(sql)
@@ -239,3 +254,45 @@ def update_domain(domain: str, **fields) -> None:
             [*fields.values(), domain],
         )
         conn.commit()
+
+
+def start_run(source: str) -> int:
+    """Record the start of a pipeline run. Returns the new run id."""
+    now = datetime.utcnow().isoformat()
+    with closing(_db()) as conn:
+        cur = conn.execute(
+            "INSERT INTO pipeline_runs (started_at, source, status) VALUES (?, ?, 'running')",
+            (now, source),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def finish_run(
+    run_id: int,
+    *,
+    matched: int,
+    downloaded: int,
+    inserted: int,
+    expired: int,
+    error: str | None = None,
+) -> None:
+    now = datetime.utcnow().isoformat()
+    status = "error" if error else "done"
+    with closing(_db()) as conn:
+        conn.execute(
+            "UPDATE pipeline_runs "
+            "SET finished_at=?, status=?, downloaded=?, inserted=?, matched=?, expired=?, error=? "
+            "WHERE id=?",
+            (now, status, downloaded, inserted, matched, expired, error, run_id),
+        )
+        conn.commit()
+
+
+def get_runs(limit: int = 100) -> list[dict]:
+    with closing(_db()) as conn:
+        cursor = conn.execute(
+            "SELECT * FROM pipeline_runs ORDER BY started_at DESC LIMIT ?",
+            (limit,),
+        )
+        return _rows_to_dicts(cursor)

@@ -611,7 +611,7 @@ def scan_new_domains(
     source: str = "whoisds",
     domainkits_path: str | None = None,
     domainsmonitor_path: str | None = None,
-) -> list[Filing]:
+) -> tuple[list[Filing], dict]:
     """
     Run the full domain pipeline and return Filing objects for newly matched domains.
 
@@ -704,4 +704,10 @@ def scan_new_domains(
     matched = _run_site_phase(filing_date)
     print(f"[domain_scanner] {len(matched)} newly matched domains", flush=True)
 
-    return matched
+    stats = {
+        "downloaded": downloaded_total,
+        "inserted": inserted_total,
+        "matched": len(matched),
+        "expired": expired,
+    }
+    return matched, stats

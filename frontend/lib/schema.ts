@@ -1,5 +1,20 @@
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
+export const pipelineRuns = sqliteTable("pipeline_runs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  startedAt: text("started_at").notNull(),
+  finishedAt: text("finished_at"),
+  source: text("source"),
+  status: text("status").notNull().default("running"),
+  downloaded: integer("downloaded"),
+  inserted: integer("inserted"),
+  matched: integer("matched"),
+  expired: integer("expired"),
+  error: text("error"),
+});
+
+export type PipelineRun = typeof pipelineRuns.$inferSelect;
+
 export const domains = sqliteTable("domains", {
   domain: text("domain").primaryKey(),
   sourceDate: text("source_date"),

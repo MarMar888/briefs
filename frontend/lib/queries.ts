@@ -1,6 +1,6 @@
 import { and, avg, count, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { db } from "./db";
-import { domains } from "./schema";
+import { domains, pipelineRuns } from "./schema";
 
 export type LeadFilters = {
   minScore?: number;
@@ -67,6 +67,14 @@ export async function getPendingDomains() {
     .where(inArray(domains.status, ["new", "geo_pending", "site_pending"]))
     .orderBy(sql`${domains.expiresAt} asc nulls last`, sql`${domains.nextCheckAt} asc nulls first`)
     .limit(500);
+}
+
+export async function getPipelineRuns(limit = 100) {
+  return db
+    .select()
+    .from(pipelineRuns)
+    .orderBy(desc(pipelineRuns.startedAt))
+    .limit(limit);
 }
 
 export async function reviewDomain(domain: string, verdict: "approved" | "rejected", notes: string) {

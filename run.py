@@ -52,23 +52,31 @@ def main():
         filings.extend(sos_filings)
 
     if args.domains or args.domains_only:
+        import domain_store
         from domain_scanner import scan_new_domains
+        from email_alerts import send_match_alerts
+
+        domain_store.init_db()
+        run_id = domain_store.start_run(source=args.domain_source)
         print(f"[run] Scanning newly registered domains from {args.domain_source} (last {args.days} days, limit {args.domain_limit})...")
-        domain_filings = scan_new_domains(
-            days=args.days,
-            limit=args.domain_limit,
-            keyword_filter=args.keywords,
-            start_date=args.start_date,
-            defer_site_days=args.defer_site_days,
-            source=args.domain_source,
-            domainkits_path=args.domainkits_path,
-            domainsmonitor_path=args.domainsmonitor_path,
-        )
+        try:
+            domain_filings, scan_stats = scan_new_domains(
+                days=args.days,
+                limit=args.domain_limit,
+                keyword_filter=args.keywords,
+                start_date=args.start_date,
+                defer_site_days=args.defer_site_days,
+                source=args.domain_source,
+                domainkits_path=args.domainkits_path,
+                domainsmonitor_path=args.domainsmonitor_path,
+            )
+            domain_store.finish_run(run_id, **scan_stats)
+        except Exception as exc:
+            domain_store.finish_run(run_id, matched=0, downloaded=0, inserted=0, expired=0, error=str(exc))
+            raise
+
         print(f"[run] {len(domain_filings)} new USA-hosted domains queued for classification")
         filings.extend(domain_filings)
-
-        import domain_store
-        from email_alerts import send_match_alerts
 
         unalerted = domain_store.get_unalerted_matches()
         if unalerted and send_match_alerts(unalerted):

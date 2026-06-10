@@ -339,6 +339,25 @@ tr:last-child td {
   color: var(--green);
 }
 
+.status.running {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
+.status.done {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.status.error {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.activityTable table {
+  min-width: 760px;
+}
+
 @media (max-width: 760px) {
   .topbar,
   .pageHeader {
