@@ -517,12 +517,26 @@ def _geolocate_ips(ips: list[str]) -> dict[str, str]:
     return country_by_ip
 
 
-def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0) -> None:
+def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter: bool = False) -> None:
     due = domain_store.get_due(["new", "geo_pending"])
     if not due:
         return
+
+    if keyword_filter:
+        now = datetime.utcnow().isoformat()
+        rejected = [r for r in due if not _matches_keywords(r["domain"])]
+        if rejected:
+            print(f"[domain_scanner]   Geo keyword filter: skipping {len(rejected)} non-keyword domains", flush=True)
+            for r in rejected:
+                domain_store.update_domain(r["domain"], status="not_outdoor",
+                                           classification_reason="no keyword match in domain name",
+                                           classified_at=now, last_checked_at=now)
+        due = [r for r in due if _matches_keywords(r["domain"])]
+
     if geo_limit > 0:
         due = due[:geo_limit]
+    if not due:
+        return
     print(f"[domain_scanner] Geo phase: {len(due)} domains", flush=True)
 
     ip_by_domain = _resolve_domains([r["domain"] for r in due])
@@ -819,7 +833,7 @@ def scan_new_domains(
     if skip_geo:
         print("[domain_scanner] Skipping geo phase", flush=True)
     else:
-        _run_geo_phase(defer_site_days=defer_site_days, geo_limit=geo_limit)
+        _run_geo_phase(defer_site_days=defer_site_days, geo_limit=geo_limit, keyword_filter=keyword_filter)
 
     # 4. Site phase: site_pending → matched or not_outdoor
     filing_date = today.strftime("%m/%d/%Y")
