@@ -214,13 +214,9 @@ td {
 
 th {
   background: #fbfbf8;
-  box-shadow: inset 0 -1px 0 var(--line);
   color: #475467;
   font-size: 12px;
   font-weight: 700;
-  position: sticky;
-  top: 58px;
-  z-index: 5;
 }
 
 tr:last-child td {
