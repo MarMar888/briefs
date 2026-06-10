@@ -105,6 +105,9 @@ _MIGRATIONS = [
     "ALTER TABLE domains ADD COLUMN human_reviewed INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE domains ADD COLUMN human_verdict TEXT",
     "ALTER TABLE domains ADD COLUMN human_review_notes TEXT",
+    "ALTER TABLE domains ADD COLUMN owner_name TEXT",
+    "ALTER TABLE domains ADD COLUMN full_address TEXT",
+    "ALTER TABLE domains ADD COLUMN enriched_at TEXT",
 ]
 
 
@@ -211,6 +214,16 @@ def requeue_rescrapes() -> int:
         )
         conn.commit()
         return cur.rowcount
+
+
+def get_unenriched_matches(limit: int = 0) -> list[dict]:
+    """Return matched domains that have not yet been enriched."""
+    with closing(_db()) as conn:
+        sql = "SELECT * FROM domains WHERE status = 'matched' AND enriched_at IS NULL ORDER BY score DESC"
+        if limit > 0:
+            sql += f" LIMIT {limit}"
+        cursor = conn.execute(sql)
+        return _rows_to_dicts(cursor)
 
 
 def get_unalerted_matches() -> list[dict]:
