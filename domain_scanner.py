@@ -18,7 +18,7 @@ Run flow (each invocation):
 """
 
 import base64
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, as_completed, wait
 import csv
 import gzip
 import io
@@ -42,9 +42,14 @@ USA_TLDS = {".com", ".net", ".us"}
 IP_API_BATCH_URL = "http://ip-api.com/batch"
 DNS_WORKERS = 64
 DNS_TIMEOUT_SECONDS = 3
-GEO_BATCH_SIZE = 100
-GEO_BATCH_SLEEP_SECONDS = 1.5
+DNS_PROGRESS_INTERVAL = 1000
+GEO_BATCH_SIZE = int(os.environ.get("GEO_BATCH_SIZE", "100"))
+GEO_BATCH_SLEEP_SECONDS = float(os.environ.get("GEO_BATCH_SLEEP_SECONDS", "1.5"))
+GEO_BATCH_RETRIES = int(os.environ.get("GEO_BATCH_RETRIES", "3"))
+GEO_RETRY_SLEEP_SECONDS = float(os.environ.get("GEO_RETRY_SLEEP_SECONDS", "5"))
+GEO_PROGRESS_INTERVAL = 25
 SITE_WORKERS = 8
+KEYWORD_BATCH_SIZE = 25000
 DOMAIN_RE = re.compile(r"^(?:https?://)?(?:www\.)?([a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+)", re.I)
 
 # Domain name keywords for pre-filtering NRDs before geo/scrape.
@@ -150,6 +155,66 @@ def _matches_keywords(domain: str) -> bool:
             if token in OUTDOOR_KEYWORDS:
                 return True
     return False
+
+
+def _filter_keyword_batch(domains: list[str]) -> tuple[int, list[str]]:
+    return len(domains), [domain for domain in domains if _matches_keywords(domain)]
+
+
+def _iter_chunks(items: list[str], size: int):
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
+
+
+def _keyword_filter_domains(domains: list[str], workers: int = 1) -> list[str]:
+    if not domains:
+        return []
+    if workers <= 1 or len(domains) <= KEYWORD_BATCH_SIZE:
+        return [domain for domain in domains if _matches_keywords(domain)]
+
+    total_chunks = (len(domains) + KEYWORD_BATCH_SIZE - 1) // KEYWORD_BATCH_SIZE
+    progress_every = max(1, total_chunks // 20)
+    max_pending = max(1, workers * 2)
+    chunk_iter = iter(_iter_chunks(domains, KEYWORD_BATCH_SIZE))
+    filtered: list[str] = []
+    pending = set()
+    processed = 0
+    completed_chunks = 0
+
+    print(
+        f"[domain_scanner] Keyword filter: {len(domains)} domains "
+        f"across {workers} processes",
+        flush=True,
+    )
+
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        while len(pending) < max_pending:
+            try:
+                pending.add(executor.submit(_filter_keyword_batch, next(chunk_iter)))
+            except StopIteration:
+                break
+
+        while pending:
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                checked, matches = future.result()
+                processed += checked
+                completed_chunks += 1
+                filtered.extend(matches)
+
+                if completed_chunks % progress_every == 0 or completed_chunks == total_chunks:
+                    print(
+                        f"[domain_scanner]   keyword progress: "
+                        f"{processed}/{len(domains)} checked, {len(filtered)} matched",
+                        flush=True,
+                    )
+
+                try:
+                    pending.add(executor.submit(_filter_keyword_batch, next(chunk_iter)))
+                except StopIteration:
+                    pass
+
+    return filtered
 
 
 def _tld(domain: str) -> str:
@@ -315,32 +380,57 @@ def _resolve_domain(domain: str) -> str | None:
 def _resolve_domains(domains: list[str]) -> dict[str, str]:
     socket.setdefaulttimeout(DNS_TIMEOUT_SECONDS)
     resolved: dict[str, str] = {}
+    total = len(domains)
+    completed = 0
     with ThreadPoolExecutor(max_workers=DNS_WORKERS) as executor:
         futures = {executor.submit(_resolve_domain, d): d for d in domains}
         for future in as_completed(futures):
+            completed += 1
             ip = future.result()
             if ip:
                 resolved[futures[future]] = ip
+            if completed % DNS_PROGRESS_INTERVAL == 0 or completed == total:
+                print(
+                    f"[domain_scanner]   DNS progress: "
+                    f"{completed}/{total} checked, {len(resolved)} resolved",
+                    flush=True,
+                )
     return resolved
 
 
 def _geolocate_ips(ips: list[str]) -> dict[str, str]:
     country_by_ip: dict[str, str] = {}
+    total_batches = (len(ips) + GEO_BATCH_SIZE - 1) // GEO_BATCH_SIZE
     for i in range(0, len(ips), GEO_BATCH_SIZE):
         batch = ips[i:i + GEO_BATCH_SIZE]
-        try:
-            resp = requests.post(
-                IP_API_BATCH_URL,
-                json=[{"query": ip, "fields": "status,countryCode,query"} for ip in batch],
-                headers=HEADERS,
-                timeout=15,
+        batch_num = (i // GEO_BATCH_SIZE) + 1
+        for attempt in range(1, GEO_BATCH_RETRIES + 1):
+            try:
+                resp = requests.post(
+                    IP_API_BATCH_URL,
+                    json=[{"query": ip, "fields": "status,countryCode,query"} for ip in batch],
+                    headers=HEADERS,
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                for result in resp.json():
+                    if result.get("status") == "success" and result.get("query"):
+                        country_by_ip[result["query"]] = result.get("countryCode", "")
+                break
+            except Exception as e:
+                if attempt == GEO_BATCH_RETRIES:
+                    print(f"[domain_scanner] Geo batch failed after {attempt} attempts: {e} — leaving batch for retry", flush=True)
+                    break
+                sleep_for = GEO_RETRY_SLEEP_SECONDS * attempt
+                print(f"[domain_scanner] Geo batch failed: {e} — retrying in {sleep_for}s", flush=True)
+                time.sleep(sleep_for)
+        if batch_num % GEO_PROGRESS_INTERVAL == 0 or batch_num == total_batches:
+            print(
+                f"[domain_scanner]   Geo progress: "
+                f"{min(i + GEO_BATCH_SIZE, len(ips))}/{len(ips)} IPs checked "
+                f"({batch_num}/{total_batches} batches), {len(country_by_ip)} located",
+                flush=True,
             )
-            resp.raise_for_status()
-            for result in resp.json():
-                if result.get("status") == "success" and result.get("query"):
-                    country_by_ip[result["query"]] = result.get("countryCode", "")
-        except Exception as e:
-            print(f"[domain_scanner] Geo batch failed: {e} — skipping batch")
         if i + GEO_BATCH_SIZE < len(ips):
             time.sleep(GEO_BATCH_SLEEP_SECONDS)
     return country_by_ip
@@ -477,6 +567,12 @@ def _run_site_phase(filing_date: str) -> list[Filing]:
                 ))
             else:
                 v = result["verdict"]
+                if v.get("reason") == "classification error":
+                    print(f"{prefix} ⏳ pending — LLM error, will retry", flush=True)
+                    domain_store.update_domain(domain, status="site_pending",
+                                               last_error="classification error",
+                                               last_checked_at=now, attempt_count=count)
+                    continue
                 score     = v.get("score", 0)
                 score_cat = v.get("score_category", "")
                 score_tag = f" [{score_cat}:{score}]" if score >= 40 else ""
@@ -497,10 +593,13 @@ def scan_new_domains(
     days: int = 1,
     limit: int = 1000,
     keyword_filter: bool = False,
+    keyword_workers: int = 1,
     start_date: str | None = None,
     defer_site_days: int = 0,
     source: str = "whoisds",
     domainkits_path: str | None = None,
+    skip_import: bool = False,
+    skip_geo: bool = False,
 ) -> list[Filing]:
     """
     Run the full domain pipeline and return Filing objects for newly matched domains.
@@ -509,9 +608,11 @@ def scan_new_domains(
         days:           Number of days to pull NRD lists for.
         limit:          Max newly discovered domains to upsert from the NRD feed (0 = no limit).
         keyword_filter: If True, only process domains whose name contains an outdoor keyword.
+        keyword_workers: Processes to use for keyword filtering.
         start_date:     YYYY-MM-DD to start from, pulling forward `days` days. Defaults to yesterday.
         source:         NRD source: whoisds, domainkits, or domainkits-file.
         domainkits_path: File or directory of DomainKits downloads for domainkits-file.
+        skip_import:    If True, skip source import/filtering and process queued SQLite rows.
     """
     domain_store.init_db()
     today = datetime.now()
@@ -522,56 +623,62 @@ def scan_new_domains(
     else:
         dates = [today - timedelta(days=i) for i in range(1, days + 1)]
 
-    # 1. Download/import + TLD/keyword filter
-    if source == "domainkits-file":
-        if not domainkits_path:
-            print("[domain_scanner] --domainkits-path is required with --domain-source domainkits-file", flush=True)
-            batches = []
-        else:
-            batches = _fetch_domainkits_file_batches(domainkits_path, dates)
+    if skip_import:
+        print("[domain_scanner] Skipping domain import; resuming queued domains from SQLite", flush=True)
     else:
-        fetcher = _fetch_domainkits if source == "domainkits" else _fetch_whoisds
-        batches = []
-        for date in dates:
-            print(f"[domain_scanner] Downloading {date.strftime('%Y-%m-%d')} NRD list from {source}...", flush=True)
-            daily = fetcher(date)
-            batches.append((date.strftime("%Y-%m-%d"), daily))
+        # 1. Download/import + TLD/keyword filter
+        if source == "domainkits-file":
+            if not domainkits_path:
+                print("[domain_scanner] --domainkits-path is required with --domain-source domainkits-file", flush=True)
+                batches = []
+            else:
+                batches = _fetch_domainkits_file_batches(domainkits_path, dates)
+        else:
+            fetcher = _fetch_domainkits if source == "domainkits" else _fetch_whoisds
+            batches = []
+            for date in dates:
+                print(f"[domain_scanner] Downloading {date.strftime('%Y-%m-%d')} NRD list from {source}...", flush=True)
+                daily = fetcher(date)
+                batches.append((date.strftime("%Y-%m-%d"), daily))
 
-    filtered_domains: list[tuple[str, str]] = []
-    downloaded_total = 0
-    tld_total = 0
-    keyword_total = 0
-    for source_date, raw in batches:
-        downloaded_total += len(raw)
-        print(f"[domain_scanner]   {source_date}: {len(raw)} domains loaded", flush=True)
+        filtered_domains: list[tuple[str, str]] = []
+        downloaded_total = 0
+        tld_total = 0
+        keyword_total = 0
+        for source_date, raw in batches:
+            downloaded_total += len(raw)
+            print(f"[domain_scanner]   {source_date}: {len(raw)} domains loaded", flush=True)
 
-        tld_ok = [d for d in raw if _tld(d) in USA_TLDS]
-        tld_total += len(tld_ok)
+            tld_ok = [d for d in raw if _tld(d) in USA_TLDS]
+            tld_total += len(tld_ok)
 
+            if keyword_filter:
+                tld_ok = _keyword_filter_domains(tld_ok, workers=keyword_workers)
+            keyword_total += len(tld_ok)
+            filtered_domains.extend((source_date, domain) for domain in tld_ok)
+
+        random.shuffle(filtered_domains)
+        if limit > 0:
+            filtered_domains = filtered_domains[:limit]
+
+        inserted_total = 0
+        domains_by_date: dict[str, list[str]] = {}
+        for source_date, domain in filtered_domains:
+            domains_by_date.setdefault(source_date, []).append(domain)
+        for source_date, domains in domains_by_date.items():
+            inserted_total += domain_store.upsert_new(domains, source_date)
+
+        print(f"[domain_scanner] {downloaded_total} domains loaded total", flush=True)
+        print(f"[domain_scanner] {tld_total} after TLD filter", flush=True)
         if keyword_filter:
-            tld_ok = [d for d in tld_ok if _matches_keywords(d)]
-        keyword_total += len(tld_ok)
-        filtered_domains.extend((source_date, domain) for domain in tld_ok)
-
-    random.shuffle(filtered_domains)
-    if limit > 0:
-        filtered_domains = filtered_domains[:limit]
-
-    inserted_total = 0
-    domains_by_date: dict[str, list[str]] = {}
-    for source_date, domain in filtered_domains:
-        domains_by_date.setdefault(source_date, []).append(domain)
-    for source_date, domains in domains_by_date.items():
-        inserted_total += domain_store.upsert_new(domains, source_date)
-
-    print(f"[domain_scanner] {downloaded_total} domains loaded total", flush=True)
-    print(f"[domain_scanner] {tld_total} after TLD filter", flush=True)
-    if keyword_filter:
-        print(f"[domain_scanner] {keyword_total} after keyword filter", flush=True)
-    print(f"[domain_scanner] {inserted_total} new domains added to queue", flush=True)
+            print(f"[domain_scanner] {keyword_total} after keyword filter", flush=True)
+        print(f"[domain_scanner] {inserted_total} new domains added to queue", flush=True)
 
     # 3. Geo phase: new + geo_pending → site_pending or non_us
-    _run_geo_phase(defer_site_days=defer_site_days)
+    if skip_geo:
+        print("[domain_scanner] Skipping geo phase", flush=True)
+    else:
+        _run_geo_phase(defer_site_days=defer_site_days)
 
     # 4. Site phase: site_pending → matched or not_outdoor
     filing_date = today.strftime("%m/%d/%Y")

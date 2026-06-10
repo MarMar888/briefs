@@ -16,8 +16,8 @@ from bs4 import BeautifulSoup
 
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-OPENROUTER_MODEL   = "meta-llama/llama-3.1-8b-instruct"
-_LLM_RETRIES       = 5
+OPENROUTER_MODEL   = os.environ.get("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct")
+_LLM_RETRIES       = 6
 _MIN_CONTENT_CHARS = 300
 _RENDER_TIMEOUT_MS = int(os.environ.get("RENDER_TIMEOUT_MS", "12000"))
 _RENDER_WORKERS = int(os.environ.get("RENDER_WORKERS", "2"))
@@ -36,7 +36,7 @@ TYPE B — Outdoor resort, lodge, cabin rentals, campground, glamping, RV park (
 
 TYPE C — Outdoor gear manufacturer or distributor (makes or wholesales outdoor sports equipment, apparel, or accessories).
 
-TYPE D — Commercial outdoor tour or activity operator with a physical or guided operation: hiking tours, biking tours, kayak/canoe tours, climbing guide services, fishing charters, hunting guides, whitewater rafting, zip-line/adventure parks, snowmobile tours, horseback riding outfitters, etc. Any business that runs commercial outdoor trips or activities for paying customers qualifies, even without gear sales.
+TYPE D — Commercial outdoor sports tour or activity operator with a physical or guided operation: hiking tours, biking tours, kayak/canoe tours, climbing guide services, fishing charters, hunting guides, whitewater rafting, zip-line/adventure parks, snowmobile tours, horseback riding outfitters, etc. The activity must involve physical outdoor sports or recreation requiring liability coverage — NOT games, entertainment, scavenger hunts, treasure hunts, escape rooms, or similar leisure/entertainment concepts.
 
 Lead quality gate:
 - The domain being newly registered is NOT enough. We want likely new or early-stage businesses, not old businesses that only recently registered a domain.
@@ -60,7 +60,7 @@ Answer NO if:
 - Template/starter site with generic content and no real business-specific evidence
 - Long-running/established business or organization, even if the website/domain appears newly registered
 - Private/member club, youth camp, scout camp, nonprofit, association, or community organization
-- Non-outdoor business (food, construction, medical, tech, landscaping, real estate, etc.)
+- Non-outdoor sports business (food, construction, medical, tech, landscaping, real estate, games, entertainment, escape rooms, scavenger hunts, treasure hunts, puzzle hunts, trivia, etc.)
 - Parked domain, placeholder, or "coming soon" page with no real content
 - Content is too sparse or generic to determine
 - The content explicitly names a non-US country as the business location (e.g. "London, UK",
@@ -444,7 +444,8 @@ def _call_llm(prompt: str, label: str) -> str:
             return msg.choices[0].message.content.strip()
         except Exception as e:
             err = str(e)
-            wait = 3.0 * (attempt + 1)
+            is_429 = "429" in str(e)
+            wait = (20.0 * (attempt + 1)) if is_429 else (3.0 * (attempt + 1))
             print(f"[classifier] OpenRouter error for '{label}' (attempt {attempt+1}): {err} — retrying in {wait:.0f}s", flush=True)
             time.sleep(wait)
 
