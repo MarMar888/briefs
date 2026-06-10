@@ -15,3 +15,7 @@ domainkits-nrds/
 
 # env
 .env
+
+# OS / editor junk
+.DS_Store
+~$*
