@@ -49,6 +49,8 @@ def main():
                         help="For --domains/--domains-only, skip source import/filtering and resume queued domains already in SQLite")
     parser.add_argument("--skip-geo", action="store_true",
                         help="Skip geo phase and go straight to site classification")
+    parser.add_argument("--site-limit", type=int, default=0,
+                        help="Max site_pending domains to classify per run (0 = no limit); use for batched backfill")
     args = parser.parse_args()
 
     if args.domain_file:
@@ -91,6 +93,7 @@ def main():
                 keyword_workers=args.keyword_workers,
                 skip_import=args.skip_domain_import,
                 skip_geo=args.skip_geo,
+                site_limit=args.site_limit,
             )
             domain_store.finish_run(run_id, **scan_stats)
         except Exception as exc:

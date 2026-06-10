@@ -586,10 +586,12 @@ def _parse_iso(value: str | None) -> datetime | None:
         return None
 
 
-def _run_site_phase(filing_date: str) -> list[Filing]:
+def _run_site_phase(filing_date: str, site_limit: int = 0) -> list[Filing]:
     due = domain_store.get_due(["site_pending"])
     if not due:
         return []
+    if site_limit > 0:
+        due = due[:site_limit]
     total = len(due)
     print(f"[domain_scanner] Site phase: {total} domains ({SITE_WORKERS} workers)", flush=True)
 
@@ -710,6 +712,7 @@ def scan_new_domains(
     domainsmonitor_path: str | None = None,
     skip_import: bool = False,
     skip_geo: bool = False,
+    site_limit: int = 0,
 ) -> tuple[list[Filing], dict]:
     """
     Run the full domain pipeline and return Filing objects for newly matched domains.
@@ -809,7 +812,7 @@ def scan_new_domains(
 
     # 4. Site phase: site_pending → matched or not_outdoor
     filing_date = today.strftime("%m/%d/%Y")
-    matched = _run_site_phase(filing_date)
+    matched = _run_site_phase(filing_date, site_limit=site_limit)
     print(f"[domain_scanner] {len(matched)} newly matched domains", flush=True)
 
     stats = {

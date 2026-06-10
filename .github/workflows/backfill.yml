@@ -1,0 +1,46 @@
+name: Backfill Site Classification
+
+on:
+  schedule:
+    # Runs every 4 hours — chips through site_pending queue until empty
+    - cron: "0 */4 * * *"
+  workflow_dispatch:
+    inputs:
+      site_limit:
+        description: "Max domains to classify this run (0 = no limit)"
+        required: false
+        default: "1000"
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run site classification batch
+        run: |
+          LIMIT="${{ github.event.inputs.site_limit || '1000' }}"
+          echo "[backfill] Running site classification, site-limit=$LIMIT"
+          python run.py \
+            --domains-only \
+            --skip-domain-import \
+            --skip-geo \
+            --site-limit "$LIMIT"
+        env:
+          DOMAIN_DB_PATH: ${{ secrets.TURSO_DB_URL }}
+          TURSO_DB_URL: ${{ secrets.TURSO_DB_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+          ALERT_FROM: ${{ secrets.ALERT_FROM }}
