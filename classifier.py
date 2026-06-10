@@ -5,7 +5,6 @@ Reads business name + website content (if available).
 
 import os
 import re
-import threading
 import time
 from datetime import datetime
 from html import unescape
@@ -19,9 +18,7 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 OPENROUTER_MODEL   = "meta-llama/llama-3.1-8b-instruct"
 _LLM_RETRIES       = 5
 _MIN_CONTENT_CHARS = 300
-_RENDER_TIMEOUT_MS = int(os.environ.get("RENDER_TIMEOUT_MS", "12000"))
-_RENDER_WORKERS = int(os.environ.get("RENDER_WORKERS", "2"))
-_RENDER_SEMAPHORE = threading.BoundedSemaphore(_RENDER_WORKERS)
+_FIRECRAWL_TIMEOUT_SECONDS = int(os.environ.get("FIRECRAWL_TIMEOUT_SECONDS", "40"))
 
 DOMAIN_CLASSIFY_PROMPT = """You are identifying whether a newly registered website belongs to a NEW OR EARLY-STAGE commercial business in the outdoor sports industry that would need commercial insurance.
 
@@ -236,42 +233,67 @@ def _extract_js_text(js: str, max_chars: int = 2500) -> str:
     return " ".join(ordered)[:max_chars]
 
 
-def _fetch_rendered_text(url: str, max_chars: int = 3000) -> str:
-    """Render JavaScript-heavy pages with Playwright and return body text."""
-    try:
-        from playwright.sync_api import sync_playwright
-    except Exception:
+def _looks_js_heavy(html: str, extracted_text: str) -> bool:
+    lower = html[:20000].lower()
+    text = extracted_text.strip().lower()
+    if "enable javascript" in text or "enable javascript" in lower:
+        return True
+    if len(text) >= _MIN_CONTENT_CHARS:
+        return False
+    return any(
+        signal in lower
+        for signal in (
+            'id="root"',
+            "id='root'",
+            'id="app"',
+            "id='app'",
+            "__next",
+            "__nuxt",
+            "vite",
+            "shopify",
+            "squarespace",
+            "wixstatic",
+        )
+    )
+
+
+def _fetch_via_firecrawl(url: str, max_chars: int = 3000) -> str:
+    """Fetch JavaScript-rendered page markdown through Firecrawl."""
+    api_key = os.environ.get("FIRECRAWL_API_KEY") or os.environ.get("FIRECRAWL")
+    if not api_key:
         return ""
 
-    acquired = _RENDER_SEMAPHORE.acquire(timeout=1)
-    if not acquired:
-        return ""
+    endpoint = os.environ.get("FIRECRAWL_API_URL", "https://api.firecrawl.dev/v2/scrape")
+    payload = {
+        "url": url,
+        "formats": ["markdown"],
+        "onlyMainContent": True,
+        "waitFor": 1000,
+        "timeout": 30000,
+        "location": {"country": "US", "languages": ["en-US"]},
+        "removeBase64Images": True,
+        "blockAds": True,
+    }
 
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            try:
-                context = browser.new_context(
-                    user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-                               "(KHTML, like Gecko) Chrome/125.0 Safari/537.36",
-                    viewport={"width": 1280, "height": 900},
-                )
-                page = context.new_page()
-                page.goto(url, wait_until="domcontentloaded", timeout=_RENDER_TIMEOUT_MS)
-                try:
-                    page.wait_for_load_state("networkidle", timeout=3000)
-                except Exception:
-                    pass
-                page.wait_for_timeout(500)
-                text = page.locator("body").inner_text(timeout=3000)
-                text = re.sub(r"\s+", " ", text).strip()
-                return text[:max_chars]
-            finally:
-                browser.close()
-    except Exception:
+        resp = requests.post(
+            endpoint,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=_FIRECRAWL_TIMEOUT_SECONDS,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        data = body.get("data") or {}
+        text = data.get("markdown") or data.get("summary") or ""
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:max_chars]
+    except Exception as e:
+        print(f"[classifier] Firecrawl scrape failed for {url}: {e}", flush=True)
         return ""
-    finally:
-        _RENDER_SEMAPHORE.release()
 
 
 def _fetch_page_text(url: str, max_chars: int = 1000) -> str:
@@ -312,11 +334,9 @@ def _fetch_page_text(url: str, max_chars: int = 1000) -> str:
             if js_texts:
                 text = " ".join(filter(None, [text, *js_texts]))
 
-        if "enable javascript" in initial_text.lower():
-            rendered_text = _fetch_rendered_text(resp.url, max_chars=max_chars)
-            if len(rendered_text) >= _MIN_CONTENT_CHARS:
-                text = " ".join(filter(None, [meta_text, rendered_text]))
-            elif len(rendered_text) > len(text):
+        if len(text.strip()) < _MIN_CONTENT_CHARS and _looks_js_heavy(resp.text, initial_text):
+            rendered_text = _fetch_via_firecrawl(resp.url, max_chars=max_chars)
+            if len(rendered_text) > len(text):
                 text = " ".join(filter(None, [meta_text, rendered_text]))
 
         return text[:max_chars]

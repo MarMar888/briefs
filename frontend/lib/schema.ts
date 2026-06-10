@@ -1,0 +1,36 @@
+import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+
+export const domains = sqliteTable("domains", {
+  domain: text("domain").primaryKey(),
+  sourceDate: text("source_date"),
+  firstSeenAt: text("first_seen_at").notNull(),
+  lastSeenAt: text("last_seen_at").notNull(),
+  expiresAt: text("expires_at"),
+  status: text("status").notNull(),
+  resolvedIp: text("resolved_ip"),
+  countryCode: text("country_code"),
+  websiteUrl: text("website_url"),
+  location: text("location"),
+  attemptCount: integer("attempt_count").notNull().default(0),
+  lastCheckedAt: text("last_checked_at"),
+  nextCheckAt: text("next_check_at"),
+  lastHttpStatus: integer("last_http_status"),
+  lastError: text("last_error"),
+  classificationReason: text("classification_reason"),
+  classifiedAt: text("classified_at"),
+  established: text("established"),
+  isTemplate: integer("is_template", { mode: "boolean" }).notNull().default(false),
+  score: integer("score"),
+  scoreCategory: text("score_category"),
+  redirectedTo: text("redirected_to"),
+  redirectDomain: text("redirect_domain"),
+  phone: text("phone"),
+  email: text("email"),
+  ecomOnly: integer("ecom_only", { mode: "boolean" }).notNull().default(false),
+  emailSentAt: text("email_sent_at"),
+  humanReviewed: integer("human_reviewed", { mode: "boolean" }).notNull().default(false),
+  humanVerdict: text("human_verdict"),
+  humanReviewNotes: text("human_review_notes")
+});
+
+export type Domain = typeof domains.$inferSelect;

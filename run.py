@@ -31,10 +31,16 @@ def main():
                         help="Start date for NRD pulls in YYYY-MM-DD format; pulls --days days forward from this date (default: yesterday)")
     parser.add_argument("--defer-site-days", type=int, default=0,
                         help="Delay site classification N days after geo resolves (e.g. 15 gives new sites time to go live)")
-    parser.add_argument("--domain-source", choices=["whoisds", "domainkits", "domainkits-file"], default="whoisds",
-                        help="Newly registered domain source (default: whoisds)")
+    parser.add_argument(
+        "--domain-source",
+        choices=["domainsmonitor", "domainsmonitor-file", "whoisds", "domainkits", "domainkits-file"],
+        default="domainsmonitor",
+        help="Newly registered domain source (default: domainsmonitor)",
+    )
     parser.add_argument("--domainkits-path", type=str, default=None,
                         help="File or directory of DomainKits .txt/.csv/.gz/.zip downloads when --domain-source domainkits-file")
+    parser.add_argument("--domainsmonitor-path", type=str, default=None,
+                        help="File or directory of domains-monitor downloads when --domain-source domainsmonitor-file")
     args = parser.parse_args()
 
     filings = []
@@ -56,9 +62,17 @@ def main():
             defer_site_days=args.defer_site_days,
             source=args.domain_source,
             domainkits_path=args.domainkits_path,
+            domainsmonitor_path=args.domainsmonitor_path,
         )
         print(f"[run] {len(domain_filings)} new USA-hosted domains queued for classification")
         filings.extend(domain_filings)
+
+        import domain_store
+        from email_alerts import send_match_alerts
+
+        unalerted = domain_store.get_unalerted_matches()
+        if unalerted and send_match_alerts(unalerted):
+            domain_store.mark_alert_sent([match["domain"] for match in unalerted])
 
     results = []
     for i, filing in enumerate(filings, 1):
