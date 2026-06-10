@@ -217,9 +217,6 @@ th {
   color: #475467;
   font-size: 12px;
   font-weight: 700;
-  position: sticky;
-  top: 58px;
-  z-index: 5;
 }
 
 tr:last-child td {
@@ -337,6 +334,25 @@ tr:last-child td {
 .status.site_pending {
   background: var(--green-soft);
   color: var(--green);
+}
+
+.status.running {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
+.status.done {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.status.error {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.activityTable table {
+  min-width: 760px;
 }
 
 @media (max-width: 760px) {

@@ -7,16 +7,15 @@ import os
 import re
 import time
 from datetime import datetime
-from html import unescape
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
 import requests
 from openai import OpenAI
 from bs4 import BeautifulSoup
 
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-OPENROUTER_MODEL   = "meta-llama/llama-3.1-8b-instruct"
-_LLM_RETRIES       = 5
+OPENROUTER_MODEL   = os.environ.get("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct")
+_LLM_RETRIES       = 6
 _MIN_CONTENT_CHARS = 300
 _FIRECRAWL_TIMEOUT_SECONDS = int(os.environ.get("FIRECRAWL_TIMEOUT_SECONDS", "40"))
 
@@ -33,7 +32,7 @@ TYPE B — Outdoor resort, lodge, cabin rentals, campground, glamping, RV park (
 
 TYPE C — Outdoor gear manufacturer or distributor (makes or wholesales outdoor sports equipment, apparel, or accessories).
 
-TYPE D — Commercial outdoor tour or activity operator with a physical or guided operation: hiking tours, biking tours, kayak/canoe tours, climbing guide services, fishing charters, hunting guides, whitewater rafting, zip-line/adventure parks, snowmobile tours, horseback riding outfitters, etc. Any business that runs commercial outdoor trips or activities for paying customers qualifies, even without gear sales.
+TYPE D — Commercial outdoor sports tour or activity operator with a physical or guided operation: hiking tours, biking tours, kayak/canoe tours, climbing guide services, fishing charters, hunting guides, whitewater rafting, zip-line/adventure parks, snowmobile tours, horseback riding outfitters, etc. The activity must involve physical outdoor sports or recreation requiring liability coverage — NOT games, entertainment, scavenger hunts, treasure hunts, escape rooms, or similar leisure/entertainment concepts.
 
 Lead quality gate:
 - The domain being newly registered is NOT enough. We want likely new or early-stage businesses, not old businesses that only recently registered a domain.
@@ -57,7 +56,7 @@ Answer NO if:
 - Template/starter site with generic content and no real business-specific evidence
 - Long-running/established business or organization, even if the website/domain appears newly registered
 - Private/member club, youth camp, scout camp, nonprofit, association, or community organization
-- Non-outdoor business (food, construction, medical, tech, landscaping, real estate, etc.)
+- Non-outdoor sports business (food, construction, medical, tech, landscaping, real estate, games, entertainment, escape rooms, scavenger hunts, treasure hunts, puzzle hunts, trivia, etc.)
 - Parked domain, placeholder, or "coming soon" page with no real content
 - Content is too sparse or generic to determine
 - The content explicitly names a non-US country as the business location (e.g. "London, UK",
@@ -130,11 +129,6 @@ MATCH: YES or NO
 REASON: one sentence explaining why"""
 
 
-def _same_origin(base_url: str, asset_url: str) -> bool:
-    base = urlparse(base_url)
-    asset = urlparse(asset_url)
-    return asset.netloc in ("", base.netloc)
-
 
 def _site_key(url: str) -> str:
     host = (urlparse(url).hostname or "").lower()
@@ -160,101 +154,6 @@ def _detect_cross_domain_redirect(url: str) -> str:
         return ""
     return resp.url if _cross_domain_redirect(url, resp.url) else ""
 
-
-def _extract_js_text(js: str, max_chars: int = 2500) -> str:
-    """Extract likely human-readable strings from a bundled JS app."""
-    readable: list[str] = []
-    seen: set[str] = set()
-    code_signals = (
-        "react", "function", "typeof", "undefined", "anonymous", "symbol.",
-        "iterator", "displayname", "minified", "error #", "__", "!==", "===",
-        "classname", "memoized", "prototype", "propertydescriptor",
-        "removeattribute", "setattribute", "addeventlistener", "removeeventlistener",
-        "transition", "animation", "keydown", "keyup", "mousedown", "mouseup",
-        "focusin", "focusout", "composition", "selectionchange", "namespace",
-    )
-
-    candidates: list[str] = []
-    for pattern in (
-        r'(?:children|placeholder|alt|title|aria-label):"((?:\\.|[^"\\]){2,300})"',
-        r'(?:children|placeholder|alt|title|aria-label):\'((?:\\.|[^\'\\]){2,300})\'',
-        r'[\[,]\s*"((?:\\.|[^"\\]){4,300})"',
-        r"[\[,]\s*'((?:\\.|[^'\\]){4,300})'",
-    ):
-        candidates.extend(re.findall(pattern, js))
-
-    for raw in candidates:
-        try:
-            text = bytes(raw, "utf-8").decode("unicode_escape")
-        except UnicodeDecodeError:
-            text = raw
-        text = unescape(text).replace("\\n", " ").replace("\\t", " ")
-        text = re.sub(r"\s+", " ", text).strip()
-        lower = text.lower()
-
-        if len(text) < 8 or text in seen:
-            continue
-        if any(char in text for char in "{};=<>"):
-            continue
-        if not re.search(r"[A-Za-z]", text):
-            continue
-        if " " not in text and len(text) < 18:
-            continue
-        if any(signal in lower for signal in code_signals):
-            continue
-        if sum(1 for char in text if not char.isalnum() and not char.isspace()) / max(len(text), 1) > 0.2:
-            continue
-        if re.fullmatch(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", text):
-            continue
-        if text.startswith(("/", "http", "data:", "#", ".")):
-            continue
-
-        seen.add(text)
-        readable.append(text)
-
-    priority_terms = (
-        "about", "overview", "details", "location", "address", "hours",
-        "products", "services", "shop", "store", "retail", "rental", "repair",
-        "manufacturer", "distributor", "gear", "equipment", "apparel",
-        "dates", "time", "capacity", "contact",
-    )
-
-    def score(text: str) -> int:
-        lower = text.lower()
-        value = sum(2 for term in priority_terms if term in lower)
-        if re.search(r"\b\d{3,5}\s+[A-Za-z]", text):
-            value += 3
-        if re.search(r"\b(?:19|20)\d{2}\b", text):
-            value += 1
-        return value
-
-    prioritized = sorted(enumerate(readable), key=lambda item: (-score(item[1]), item[0]))
-    ordered = [text for _, text in prioritized]
-    return " ".join(ordered)[:max_chars]
-
-
-def _looks_js_heavy(html: str, extracted_text: str) -> bool:
-    lower = html[:20000].lower()
-    text = extracted_text.strip().lower()
-    if "enable javascript" in text or "enable javascript" in lower:
-        return True
-    if len(text) >= _MIN_CONTENT_CHARS:
-        return False
-    return any(
-        signal in lower
-        for signal in (
-            'id="root"',
-            "id='root'",
-            'id="app"',
-            "id='app'",
-            "__next",
-            "__nuxt",
-            "vite",
-            "shopify",
-            "squarespace",
-            "wixstatic",
-        )
-    )
 
 
 def _fetch_via_firecrawl(url: str, max_chars: int = 3000) -> str:
@@ -297,9 +196,21 @@ def _fetch_via_firecrawl(url: str, max_chars: int = 3000) -> str:
 
 
 def _fetch_page_text(url: str, max_chars: int = 1000) -> str:
-    """Fetches a URL and returns cleaned text content."""
+    """Fetches a URL and returns cleaned text content.
+
+    Uses Firecrawl as the primary scraper when a key is available so JS-heavy
+    sites (Shopify, Squarespace, React SPAs, etc.) are always rendered correctly.
+    Falls back to plain HTTP + BeautifulSoup when Firecrawl is not configured.
+    """
     if not url:
         return ""
+
+    firecrawl_key = os.environ.get("FIRECRAWL_API_KEY") or os.environ.get("FIRECRAWL")
+    if firecrawl_key:
+        text = _fetch_via_firecrawl(url, max_chars=max_chars)
+        if text:
+            return text
+
     try:
         resp = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
         resp.raise_for_status()
@@ -310,35 +221,9 @@ def _fetch_page_text(url: str, max_chars: int = 1000) -> str:
             if tag.get("name", "").lower() in {"description", "og:description", "twitter:description"}
             or tag.get("property", "").lower() in {"og:description", "twitter:description"}
         )
-        # Remove scripts and styles
         for tag in soup(["script", "style", "nav", "footer"]):
             tag.decompose()
         text = " ".join(filter(None, [meta_text, soup.get_text(separator=" ", strip=True)]))
-        initial_text = text
-
-        if len(text.strip()) < _MIN_CONTENT_CHARS and "enable javascript" in text.lower():
-            original_soup = BeautifulSoup(resp.text, "html.parser")
-            js_texts: list[str] = []
-            for script in original_soup.find_all("script", src=True)[:5]:
-                src = urljoin(resp.url, script["src"])
-                if not _same_origin(resp.url, src):
-                    continue
-                try:
-                    js_resp = requests.get(src, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
-                    js_resp.raise_for_status()
-                    js_text = _extract_js_text(js_resp.text, max_chars=max_chars)
-                    if js_text:
-                        js_texts.append(js_text)
-                except Exception:
-                    continue
-            if js_texts:
-                text = " ".join(filter(None, [text, *js_texts]))
-
-        if len(text.strip()) < _MIN_CONTENT_CHARS and _looks_js_heavy(resp.text, initial_text):
-            rendered_text = _fetch_via_firecrawl(resp.url, max_chars=max_chars)
-            if len(rendered_text) > len(text):
-                text = " ".join(filter(None, [meta_text, rendered_text]))
-
         return text[:max_chars]
     except Exception:
         return ""
@@ -464,7 +349,8 @@ def _call_llm(prompt: str, label: str) -> str:
             return msg.choices[0].message.content.strip()
         except Exception as e:
             err = str(e)
-            wait = 3.0 * (attempt + 1)
+            is_429 = "429" in str(e)
+            wait = (20.0 * (attempt + 1)) if is_429 else (3.0 * (attempt + 1))
             print(f"[classifier] OpenRouter error for '{label}' (attempt {attempt+1}): {err} — retrying in {wait:.0f}s", flush=True)
             time.sleep(wait)
 
