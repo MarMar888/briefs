@@ -2,8 +2,8 @@ name: Enrich Matched Domains
 
 on:
   schedule:
-    # Runs at 9 AM UTC daily — 2 hours after the daily pipeline
-    - cron: "0 9 * * *"
+    # Runs at 12 PM UTC daily (6 AM CST) — 1 hour after the daily pipeline
+    - cron: "0 12 * * *"
   workflow_dispatch:
     inputs:
       limit:
