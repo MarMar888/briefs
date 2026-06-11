@@ -182,8 +182,43 @@ OUTDOOR_PROPER_NOUNS = {
 }
 
 
+# Domain label suffixes that indicate directories/aggregators, not actual businesses.
+_DIRECTORY_SUFFIXES = {"finder", "directory", "listings", "locator", "search", "finder"}
+
+# Suffixes that, when paired with a known brand name, signal a copycat site.
+_COPYCAT_SUFFIXES = {"official", "store", "shop", "outlet", "sale", "deals", "discount", "cheap"}
+
+
+def _is_junk_domain(domain: str) -> bool:
+    """Return True for domain patterns that are structurally junk before scraping."""
+    label = domain.rsplit(".", 1)[0].lower()
+
+    # Double hyphens are a strong counterfeit signal (e.g. osprey--backpacks.com)
+    if "--" in label:
+        return True
+
+    parts = [part for part in re.split(r"[^a-z0-9]+", label) if part]
+
+    # Directory/aggregator suffix (e.g. archeryfinder, huntingdirectory)
+    if parts and parts[-1] in _DIRECTORY_SUFFIXES:
+        return True
+
+    # Known brand + copycat suffix (e.g. salomonofficial, arcteryx-store)
+    compact = "".join(parts)
+    for proper_noun in OUTDOOR_PROPER_NOUNS:
+        if len(proper_noun) >= 5 and proper_noun in compact:
+            remainder = compact.replace(proper_noun, "")
+            if remainder in _COPYCAT_SUFFIXES:
+                return True
+
+    return False
+
+
 def _matches_keywords(domain: str) -> bool:
     """Return True if wordninja tokens or curated proper-noun seeds match."""
+    if _is_junk_domain(domain):
+        return False
+
     label = domain.rsplit(".", 1)[0].lower()
     parts = [part for part in re.split(r"[^a-z0-9]+", label) if part]
     compact = "".join(parts)

@@ -28,7 +28,7 @@ TYPE A — Physical retail, rental, demo, or repair shop for outdoor sports gear
   mountain bike shop, paddle/kayak shop, trail running store, tackle shop, sporting goods store,
   ski rental shop, kayak rental, bike repair shop, gun shop, shooting range, archery range.
 
-TYPE B — Outdoor resort, lodge, cabin rentals, campground, glamping, RV park (new/early-stage only), marina, or fishing/hunting lodge with a physical location. For TYPE B, natural-setting accommodation IS enough — the site does not need to list specific outdoor activities or gear. A resort or lodge offering bungalows, cabins, or campsites in a nature/outdoor setting qualifies only when the site has real business-specific details such as location, booking/rates, lodging types, amenities, contact details, policies, or photos/copy specific to that property.
+TYPE B — Outdoor resort, lodge, campground, glamping, RV park (new/early-stage only), marina, or fishing/hunting lodge with a physical location. TYPE B requires a commercial-scale hospitality operation: multiple rooms, cabins, or campsites; on-site staff or check-in; or clearly managed property amenities. A single privately-owned vacation rental (one cabin, one house, one unit listed on Airbnb/VRBO/HomeAway) does NOT qualify — even with real pricing and location details. The site must represent a business, not a personal property rental. For TYPE B, natural-setting accommodation IS enough — the site does not need to list specific outdoor activities or gear — but it must have real business-specific details such as location, booking/rates, lodging types, amenities, contact details, policies, or photos/copy specific to that property.
 
 TYPE C — Outdoor gear manufacturer or distributor (makes or wholesales outdoor sports equipment, apparel, or accessories).
 
@@ -55,10 +55,13 @@ Answer NO if:
 - Online-only with no physical store, venue, or warehouse
 - Template/starter site with generic content and no real business-specific evidence
 - Long-running/established business or organization, even if the website/domain appears newly registered
-- Private/member club, youth camp, scout camp, nonprofit, association, or community organization
+- Private/member club, youth camp, scout camp, nonprofits, associations, and community organizations
 - Non-outdoor sports business (food, construction, medical, tech, landscaping, real estate, games, entertainment, escape rooms, scavenger hunts, treasure hunts, puzzle hunts, trivia, etc.)
 - Parked domain, placeholder, or "coming soon" page with no real content
 - Content is too sparse or generic to determine
+- Directory, aggregator, or finder site whose purpose is to list or link to other businesses (e.g. "find an archery shop near you", "compare fishing gear prices", business listing directories) — the domain must itself be a business, not a tool for finding businesses
+- Single-property vacation rental — a sole cabin, house, condo, or vacation home listed for short-term rental (Airbnb, VRBO, HomeAway style) is NOT a TYPE B resort or lodge; look for plural accommodation units or commercial-scale operations
+- Counterfeit or brand-impersonation site — domain name contains double hyphens (e.g. brand--name.com), misspellings of a major brand combined with generic words ("official", "store", "shop"), or content that is clearly copied from a well-known brand
 - The content explicitly names a non-US country as the business location (e.g. "London, UK",
   "Sydney, Australia", "Ontario, Canada", "Lusaka, Zambia"), or the location is an ambiguous
   non-US-looking resort/tour/camp location without a US state/address/phone signal. Do NOT guess
