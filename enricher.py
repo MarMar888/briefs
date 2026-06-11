@@ -7,6 +7,7 @@ Usage:
 """
 
 import argparse
+import asyncio
 import os
 import re
 import time
@@ -20,7 +21,6 @@ from openai import OpenAI
 
 load_dotenv()
 
-_FIRECRAWL_TIMEOUT = int(os.environ.get("FIRECRAWL_TIMEOUT_SECONDS", "40"))
 _ENRICH_WORKERS = int(os.environ.get("ENRICH_WORKERS", "4"))
 _LLM_RETRIES = 4
 
@@ -38,10 +38,43 @@ Website content:
 {content}"""
 
 
+async def _crawl4ai_fetch_async(url: str, max_chars: int) -> str:
+    from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+    from crawl4ai.content_filter_strategy import PruningContentFilter
+    from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
+
+    config = CrawlerRunConfig(
+        excluded_tags=["nav", "footer", "aside"],
+        remove_overlay_elements=True,
+        markdown_generator=DefaultMarkdownGenerator(
+            content_filter=PruningContentFilter(threshold=0.48, threshold_type="fixed"),
+            options={"ignore_links": True},
+        ),
+    )
+    async with AsyncWebCrawler() as crawler:
+        result = await crawler.arun(url=url, config=config)
+    if not result.success:
+        return ""
+    md = result.markdown
+    text = (md.fit_markdown or md.raw_markdown) if hasattr(md, "fit_markdown") else str(md)
+    return re.sub(r"\s+", " ", text).strip()[:max_chars]
+
+
+def _scrape(url: str, max_chars: int = 2000) -> str:
+    """Scrape a URL via Crawl4AI. Switch body to _firecrawl() to restore Firecrawl."""
+    try:
+        return asyncio.run(_crawl4ai_fetch_async(url, max_chars))
+    except Exception as e:
+        print(f"[enricher] Crawl4AI scrape failed for {url}: {e}", flush=True)
+        return ""
+
+
 def _firecrawl(url: str, max_chars: int = 2000) -> str:
+    """Kept for easy restore when Firecrawl credits are available."""
     api_key = os.environ.get("FIRECRAWL_API_KEY") or os.environ.get("FIRECRAWL")
     if not api_key:
         return ""
+    timeout = int(os.environ.get("FIRECRAWL_TIMEOUT_SECONDS", "40"))
     try:
         resp = requests.post(
             os.environ.get("FIRECRAWL_API_URL", "https://api.firecrawl.dev/v2/scrape"),
@@ -56,7 +89,7 @@ def _firecrawl(url: str, max_chars: int = 2000) -> str:
                 "removeBase64Images": True,
                 "blockAds": True,
             },
-            timeout=_FIRECRAWL_TIMEOUT,
+            timeout=timeout,
         )
         resp.raise_for_status()
         body = resp.json()
@@ -74,7 +107,7 @@ def _fetch_pages(base_url: str) -> str:
     urls = [base_url, f"{root}/contact", f"{root}/about"]
     parts = []
     for url in urls:
-        text = _firecrawl(url)
+        text = _scrape(url)
         if text:
             parts.append(text)
     return "\n\n".join(parts)[:5000]
