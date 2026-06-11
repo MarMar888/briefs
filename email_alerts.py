@@ -61,7 +61,7 @@ def send_match_alerts(matches: list[dict]) -> bool:
 
     api_key = os.environ.get("RESEND_API_KEY") or os.environ.get("RESEND")
     alert_email = os.environ.get("ALERT_EMAIL") or "marleyhansenbarrett@gmail.com"
-    sender = os.environ.get("ALERT_FROM") or "OSI Lead Monitor <alerts@learnripl.com>"
+    sender = os.environ.get("ALERT_FROM") or "New Leads Notifications <alerts@learnripl.com>"
 
     if not api_key or not alert_email:
         print("[email_alerts] RESEND_API_KEY and ALERT_EMAIL are required to send alerts", flush=True)

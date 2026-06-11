@@ -3,6 +3,7 @@ Classifies a business as outdoor sports or not using a free LLM via OpenRouter.
 Reads business name + website content (if available).
 """
 
+import asyncio
 import os
 import re
 import time
@@ -17,7 +18,6 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 OPENROUTER_MODEL   = os.environ.get("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct")
 _LLM_RETRIES       = 6
 _MIN_CONTENT_CHARS = 300
-_FIRECRAWL_TIMEOUT_SECONDS = int(os.environ.get("FIRECRAWL_TIMEOUT_SECONDS", "40"))
 
 DOMAIN_CLASSIFY_PROMPT = """You are identifying whether a newly registered website belongs to a NEW OR EARLY-STAGE commercial business in the outdoor sports industry that would need commercial insurance.
 
@@ -156,12 +156,43 @@ def _detect_cross_domain_redirect(url: str) -> str:
 
 
 
+async def _crawl4ai_fetch_async(url: str, max_chars: int) -> str:
+    from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+    from crawl4ai.content_filter_strategy import PruningContentFilter
+    from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
+
+    config = CrawlerRunConfig(
+        excluded_tags=["nav", "footer", "aside"],
+        remove_overlay_elements=True,
+        markdown_generator=DefaultMarkdownGenerator(
+            content_filter=PruningContentFilter(threshold=0.48, threshold_type="fixed"),
+            options={"ignore_links": True},
+        ),
+    )
+    async with AsyncWebCrawler() as crawler:
+        result = await crawler.arun(url=url, config=config)
+    if not result.success:
+        return ""
+    md = result.markdown
+    text = (md.fit_markdown or md.raw_markdown) if hasattr(md, "fit_markdown") else str(md)
+    return re.sub(r"\s+", " ", text).strip()[:max_chars]
+
+
+def _fetch_via_crawl4ai(url: str, max_chars: int = 3000) -> str:
+    """Fetch a JavaScript-rendered page via Crawl4AI (local Playwright browser)."""
+    try:
+        return asyncio.run(_crawl4ai_fetch_async(url, max_chars))
+    except Exception as e:
+        print(f"[classifier] Crawl4AI scrape failed for {url}: {e}", flush=True)
+        return ""
+
+
 def _fetch_via_firecrawl(url: str, max_chars: int = 3000) -> str:
-    """Fetch JavaScript-rendered page markdown through Firecrawl."""
+    """Fetch via Firecrawl API. Kept for easy restore when credits are available."""
     api_key = os.environ.get("FIRECRAWL_API_KEY") or os.environ.get("FIRECRAWL")
     if not api_key:
         return ""
-
+    timeout = int(os.environ.get("FIRECRAWL_TIMEOUT_SECONDS", "40"))
     endpoint = os.environ.get("FIRECRAWL_API_URL", "https://api.firecrawl.dev/v2/scrape")
     payload = {
         "url": url,
@@ -173,23 +204,18 @@ def _fetch_via_firecrawl(url: str, max_chars: int = 3000) -> str:
         "removeBase64Images": True,
         "blockAds": True,
     }
-
     try:
         resp = requests.post(
             endpoint,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json=payload,
-            timeout=_FIRECRAWL_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
         resp.raise_for_status()
         body = resp.json()
         data = body.get("data") or {}
         text = data.get("markdown") or data.get("summary") or ""
-        text = re.sub(r"\s+", " ", text).strip()
-        return text[:max_chars]
+        return re.sub(r"\s+", " ", text).strip()[:max_chars]
     except Exception as e:
         print(f"[classifier] Firecrawl scrape failed for {url}: {e}", flush=True)
         return ""
@@ -198,9 +224,9 @@ def _fetch_via_firecrawl(url: str, max_chars: int = 3000) -> str:
 def _fetch_page_text(url: str, max_chars: int = 1000) -> str:
     """Fetches a URL and returns cleaned text content.
 
-    Tries plain HTTP first to avoid burning Firecrawl credits on static sites.
-    Escalates to Firecrawl only when the plain response is below the minimum
-    content threshold (JS-heavy or bot-blocked sites).
+    Tries plain HTTP first. Escalates to Crawl4AI (local Playwright) for
+    JS-heavy sites when plain content is below threshold. Switch the escalation
+    call to _fetch_via_firecrawl to restore Firecrawl when credits are available.
     """
     if not url:
         return ""
@@ -226,11 +252,9 @@ def _fetch_page_text(url: str, max_chars: int = 1000) -> str:
     if len(plain_text.strip()) >= _MIN_CONTENT_CHARS:
         return plain_text
 
-    firecrawl_key = os.environ.get("FIRECRAWL_API_KEY") or os.environ.get("FIRECRAWL")
-    if firecrawl_key:
-        fc_text = _fetch_via_firecrawl(url, max_chars=max_chars)
-        if fc_text:
-            return fc_text
+    fc_text = _fetch_via_crawl4ai(url, max_chars=max_chars)
+    if fc_text:
+        return fc_text
 
     return plain_text
 

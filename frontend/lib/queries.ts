@@ -6,7 +6,7 @@ export type LeadFilters = {
   minScore?: number;
   maxScore?: number;
   ecomOnly?: "all" | "yes" | "no";
-  reviewed?: "all" | "yes" | "no";
+  reviewed?: "all" | "yes" | "no" | "approved" | "rejected";
 };
 
 export async function getLeadStats() {
@@ -49,9 +49,12 @@ export async function getMatchedLeads(filters: LeadFilters) {
   }
   if (filters.reviewed === "yes") {
     clauses.push(eq(domains.humanReviewed, true));
-  }
-  if (filters.reviewed === "no") {
+  } else if (filters.reviewed === "no") {
     clauses.push(eq(domains.humanReviewed, false));
+  } else if (filters.reviewed === "approved") {
+    clauses.push(eq(domains.humanVerdict, "approved"));
+  } else if (filters.reviewed === "rejected") {
+    clauses.push(eq(domains.humanVerdict, "rejected"));
   }
 
   return db
