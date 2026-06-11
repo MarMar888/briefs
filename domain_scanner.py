@@ -639,10 +639,12 @@ def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter:
         rejected = [r for r in due if not keyword_results[r["domain"]]]
         if rejected:
             print(f"[domain_scanner]   Geo keyword filter: skipping {len(rejected)} non-keyword domains", flush=True)
-            for r in rejected:
-                domain_store.update_domain(r["domain"], status="not_outdoor",
-                                           classification_reason="no keyword match in domain name",
-                                           classified_at=now, last_checked_at=now)
+            domain_store.batch_update_domains([
+                {"domain": r["domain"], "status": "not_outdoor",
+                 "classification_reason": "no keyword match in domain name",
+                 "classified_at": now, "last_checked_at": now}
+                for r in rejected
+            ])
         due = [r for r in due if keyword_results[r["domain"]]]
 
     if geo_limit > 0:
@@ -657,35 +659,37 @@ def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter:
     country_by_ip = _geolocate_ips(sorted(set(ip_by_domain.values())))
 
     geo_us = geo_non_us = geo_failed = 0
+    now = datetime.utcnow().isoformat()
+    updates = []
     for row in due:
         domain = row["domain"]
-        now = datetime.utcnow().isoformat()
         count = row["attempt_count"] + 1
         ip = ip_by_domain.get(domain)
 
         if not ip:
             geo_failed += 1
-            domain_store.update_domain(domain, status="geo_pending", last_checked_at=now, attempt_count=count)
+            updates.append({"domain": domain, "status": "geo_pending", "last_checked_at": now, "attempt_count": count})
             continue
 
         country = country_by_ip.get(ip)
         if not country:
             geo_failed += 1
-            domain_store.update_domain(domain, status="geo_pending", resolved_ip=ip,
-                                       last_checked_at=now, attempt_count=count)
+            updates.append({"domain": domain, "status": "geo_pending", "resolved_ip": ip,
+                            "last_checked_at": now, "attempt_count": count})
             continue
 
         if country != "US":
             geo_non_us += 1
-            domain_store.update_domain(domain, status="non_us", resolved_ip=ip, country_code=country,
-                                       last_checked_at=now, attempt_count=count)
+            updates.append({"domain": domain, "status": "non_us", "resolved_ip": ip,
+                            "country_code": country, "last_checked_at": now, "attempt_count": count})
         else:
             geo_us += 1
             next_check = (datetime.utcnow() + timedelta(days=defer_site_days)).isoformat() if defer_site_days else None
-            domain_store.update_domain(domain, status="site_pending", resolved_ip=ip, country_code="US",
-                                       website_url=f"https://{domain}", next_check_at=next_check,
-                                       last_checked_at=now, attempt_count=count)
+            updates.append({"domain": domain, "status": "site_pending", "resolved_ip": ip,
+                            "country_code": "US", "website_url": f"https://{domain}",
+                            "next_check_at": next_check, "last_checked_at": now, "attempt_count": count})
 
+    domain_store.batch_update_domains(updates)
     return {"geo_us": geo_us, "geo_non_us": geo_non_us, "geo_failed": geo_failed}
 
 
@@ -736,6 +740,13 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
     random_matched = 0
     site_not_outdoor = 0
     site_pending_retry = 0
+    pending_updates: list[dict] = []
+    SITE_BATCH_SIZE = 50
+
+    def _flush_site_updates():
+        if pending_updates:
+            domain_store.batch_update_domains(pending_updates)
+            pending_updates.clear()
 
     with ThreadPoolExecutor(max_workers=SITE_WORKERS) as executor:
         futures = {executor.submit(_check_domain, row): row for row in due}
@@ -756,13 +767,13 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
 
                 if expires_at and next_check_dt > expires_at:
                     print(f"{prefix} ⏳ expired — {result['pending_reason']}", flush=True)
-                    domain_store.update_domain(domain, status="expired",
-                                               last_error=result["pending_reason"],
-                                               redirected_to=result.get("redirected_to", ""),
-                                               redirect_domain=result.get("redirect_domain", ""),
-                                               phone=result.get("phone", ""),
-                                               email=result.get("email", ""),
-                                               last_checked_at=now, attempt_count=count)
+                    pending_updates.append({"domain": domain, "status": "expired",
+                                            "last_error": result["pending_reason"],
+                                            "redirected_to": result.get("redirected_to", ""),
+                                            "redirect_domain": result.get("redirect_domain", ""),
+                                            "phone": result.get("phone", ""),
+                                            "email": result.get("email", ""),
+                                            "last_checked_at": now, "attempt_count": count})
                 else:
                     print(
                         f"{prefix} ⏳ pending — {result['pending_reason']} "
@@ -770,14 +781,14 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
                         flush=True,
                     )
                     site_pending_retry += 1
-                    domain_store.update_domain(domain, status="site_pending",
-                                               last_error=result["pending_reason"],
-                                               redirected_to=result.get("redirected_to", ""),
-                                               redirect_domain=result.get("redirect_domain", ""),
-                                               phone=result.get("phone", ""),
-                                               email=result.get("email", ""),
-                                               next_check_at=next_check_dt.isoformat(),
-                                               last_checked_at=now, attempt_count=count)
+                    pending_updates.append({"domain": domain, "status": "site_pending",
+                                            "last_error": result["pending_reason"],
+                                            "redirected_to": result.get("redirected_to", ""),
+                                            "redirect_domain": result.get("redirect_domain", ""),
+                                            "phone": result.get("phone", ""),
+                                            "email": result.get("email", ""),
+                                            "next_check_at": next_check_dt.isoformat(),
+                                            "last_checked_at": now, "attempt_count": count})
             elif result["verdict"]["match"]:
                 v = result["verdict"]
                 location    = v.get("location", "")
@@ -802,16 +813,17 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
                 ]))
                 print(f"{prefix} ✓ YES — {v['reason']}  {flags}", flush=True)
                 next_rescrape = (datetime.utcnow() + timedelta(days=rescrape_days)).isoformat()
-                domain_store.update_domain(domain, status="matched",
-                                           classification_reason=v["reason"],
-                                           location=location, established=established,
-                                           is_template=is_template, ecom_only=ecom_only,
-                                           score=score, score_category=score_cat,
-                                           redirected_to=redirected_to,
-                                           redirect_domain=redirect_domain,
-                                           phone=phone, email=email,
-                                           next_check_at=next_rescrape,
-                                           classified_at=now, last_checked_at=now, attempt_count=count)
+                pending_updates.append({"domain": domain, "status": "matched",
+                                        "classification_reason": v["reason"],
+                                        "location": location, "established": established,
+                                        "is_template": is_template, "ecom_only": ecom_only,
+                                        "score": score, "score_category": score_cat,
+                                        "redirected_to": redirected_to,
+                                        "redirect_domain": redirect_domain,
+                                        "phone": phone, "email": email,
+                                        "next_check_at": next_rescrape,
+                                        "classified_at": now, "last_checked_at": now,
+                                        "attempt_count": count})
                 if row.get("random_sample"):
                     random_matched += 1
                 matched.append(Filing(
@@ -824,25 +836,31 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
                 v = result["verdict"]
                 if v.get("reason") == "classification error":
                     print(f"{prefix} ⏳ pending — LLM error, will retry", flush=True)
-                    domain_store.update_domain(domain, status="site_pending",
-                                               last_error="classification error",
-                                               last_checked_at=now, attempt_count=count)
-                    continue
-                site_not_outdoor += 1
-                score     = v.get("score", 0)
-                score_cat = v.get("score_category", "")
-                score_tag = f" [{score_cat}:{score}]" if score >= 40 else ""
-                print(f"{prefix} ✗ NO — {v['reason']}{score_tag}", flush=True)
-                next_rescrape = (datetime.utcnow() + timedelta(days=rescrape_days)).isoformat()
-                domain_store.update_domain(domain, status="not_outdoor",
-                                           classification_reason=v["reason"],
-                                           score=score, score_category=score_cat,
-                                           redirected_to=v.get("redirected_to", ""),
-                                           redirect_domain=v.get("redirect_domain", ""),
-                                           phone=v.get("phone", ""),
-                                           email=v.get("email", ""),
-                                           next_check_at=next_rescrape,
-                                           classified_at=now, last_checked_at=now, attempt_count=count)
+                    pending_updates.append({"domain": domain, "status": "site_pending",
+                                            "last_error": "classification error",
+                                            "last_checked_at": now, "attempt_count": count})
+                else:
+                    site_not_outdoor += 1
+                    score     = v.get("score", 0)
+                    score_cat = v.get("score_category", "")
+                    score_tag = f" [{score_cat}:{score}]" if score >= 40 else ""
+                    print(f"{prefix} ✗ NO — {v['reason']}{score_tag}", flush=True)
+                    next_rescrape = (datetime.utcnow() + timedelta(days=rescrape_days)).isoformat()
+                    pending_updates.append({"domain": domain, "status": "not_outdoor",
+                                            "classification_reason": v["reason"],
+                                            "score": score, "score_category": score_cat,
+                                            "redirected_to": v.get("redirected_to", ""),
+                                            "redirect_domain": v.get("redirect_domain", ""),
+                                            "phone": v.get("phone", ""),
+                                            "email": v.get("email", ""),
+                                            "next_check_at": next_rescrape,
+                                            "classified_at": now, "last_checked_at": now,
+                                            "attempt_count": count})
+
+            if len(pending_updates) >= SITE_BATCH_SIZE:
+                _flush_site_updates()
+
+    _flush_site_updates()
 
     keyword_processed = total - random_processed
     keyword_matched = len(matched) - random_matched

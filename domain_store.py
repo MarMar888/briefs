@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import time
 from contextlib import closing
 from datetime import datetime, timedelta
 
@@ -317,17 +318,60 @@ def get_matched() -> list[dict]:
         return _rows_to_dicts(cursor)
 
 
+def _execute_with_retry(fn, retries: int = 3, backoff: float = 1.0):
+    """Run fn(), retrying on transient Hrana/libSQL HTTP errors."""
+    for attempt in range(retries):
+        try:
+            return fn()
+        except ValueError as exc:
+            if "Hrana" not in str(exc) or attempt == retries - 1:
+                raise
+            time.sleep(backoff * (2 ** attempt))
+
+
 def update_domain(domain: str, **fields) -> None:
     if not fields:
         return
     fields["last_seen_at"] = datetime.utcnow().isoformat()
     set_clause = ", ".join(f"{k} = ?" for k in fields)
-    with closing(_db()) as conn:
-        conn.execute(
-            f"UPDATE domains SET {set_clause} WHERE domain = ?",
-            (*fields.values(), domain),
-        )
-        conn.commit()
+
+    def _run():
+        with closing(_db()) as conn:
+            conn.execute(
+                f"UPDATE domains SET {set_clause} WHERE domain = ?",
+                (*fields.values(), domain),
+            )
+            conn.commit()
+
+    _execute_with_retry(_run)
+
+
+def batch_update_domains(updates: list, chunk_size: int = 100) -> None:
+    """Write a list of domain updates in batches, one commit per chunk.
+
+    Each item in `updates` must be a dict with a ``domain`` key plus the
+    fields to set.  All updates in a chunk share one connection and one
+    commit, cutting Turso round-trips from O(n) to O(n/chunk_size).
+    """
+    now = datetime.utcnow().isoformat()
+    for i in range(0, len(updates), chunk_size):
+        chunk = updates[i : i + chunk_size]
+
+        def _run(chunk=chunk):
+            with closing(_db()) as conn:
+                for item in chunk:
+                    fields = {k: v for k, v in item.items() if k != "domain"}
+                    if not fields:
+                        continue
+                    fields["last_seen_at"] = now
+                    set_clause = ", ".join(f"{k} = ?" for k in fields)
+                    conn.execute(
+                        f"UPDATE domains SET {set_clause} WHERE domain = ?",
+                        (*fields.values(), item["domain"]),
+                    )
+                conn.commit()
+
+        _execute_with_retry(_run)
 
 
 def start_run(source: str) -> int:
