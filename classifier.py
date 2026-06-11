@@ -198,19 +198,14 @@ def _fetch_via_firecrawl(url: str, max_chars: int = 3000) -> str:
 def _fetch_page_text(url: str, max_chars: int = 1000) -> str:
     """Fetches a URL and returns cleaned text content.
 
-    Uses Firecrawl as the primary scraper when a key is available so JS-heavy
-    sites (Shopify, Squarespace, React SPAs, etc.) are always rendered correctly.
-    Falls back to plain HTTP + BeautifulSoup when Firecrawl is not configured.
+    Tries plain HTTP first to avoid burning Firecrawl credits on static sites.
+    Escalates to Firecrawl only when the plain response is below the minimum
+    content threshold (JS-heavy or bot-blocked sites).
     """
     if not url:
         return ""
 
-    firecrawl_key = os.environ.get("FIRECRAWL_API_KEY") or os.environ.get("FIRECRAWL")
-    if firecrawl_key:
-        text = _fetch_via_firecrawl(url, max_chars=max_chars)
-        if text:
-            return text
-
+    plain_text = ""
     try:
         resp = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
         resp.raise_for_status()
@@ -223,10 +218,21 @@ def _fetch_page_text(url: str, max_chars: int = 1000) -> str:
         )
         for tag in soup(["script", "style", "nav", "footer"]):
             tag.decompose()
-        text = " ".join(filter(None, [meta_text, soup.get_text(separator=" ", strip=True)]))
-        return text[:max_chars]
+        plain_text = " ".join(filter(None, [meta_text, soup.get_text(separator=" ", strip=True)]))
+        plain_text = plain_text[:max_chars]
     except Exception:
-        return ""
+        pass
+
+    if len(plain_text.strip()) >= _MIN_CONTENT_CHARS:
+        return plain_text
+
+    firecrawl_key = os.environ.get("FIRECRAWL_API_KEY") or os.environ.get("FIRECRAWL")
+    if firecrawl_key:
+        fc_text = _fetch_via_firecrawl(url, max_chars=max_chars)
+        if fc_text:
+            return fc_text
+
+    return plain_text
 
 
 _NO_SIGNALS = ["guide service", "guide services", "charter service", "fishing charter"]
