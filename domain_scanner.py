@@ -524,14 +524,15 @@ def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter:
 
     if keyword_filter:
         now = datetime.utcnow().isoformat()
-        rejected = [r for r in due if not _matches_keywords(r["domain"])]
+        keyword_results = {r["domain"]: _matches_keywords(r["domain"]) for r in due}
+        rejected = [r for r in due if not keyword_results[r["domain"]]]
         if rejected:
             print(f"[domain_scanner]   Geo keyword filter: skipping {len(rejected)} non-keyword domains", flush=True)
             for r in rejected:
                 domain_store.update_domain(r["domain"], status="not_outdoor",
                                            classification_reason="no keyword match in domain name",
                                            classified_at=now, last_checked_at=now)
-        due = [r for r in due if _matches_keywords(r["domain"])]
+        due = [r for r in due if keyword_results[r["domain"]]]
 
     if geo_limit > 0:
         due = due[:geo_limit]

@@ -36,4 +36,5 @@ jobs:
           TURSO_DB_URL: ${{ secrets.TURSO_DB_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          FIRECRAWL_TIMEOUT_SECONDS: "15"
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

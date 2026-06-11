@@ -66,6 +66,9 @@ SELECT
     redirect_domain,
     phone,
     email,
+    owner_name,
+    full_address,
+    enriched_at,
     classification_reason  AS reason,
     classified_at,
     source_date
@@ -204,13 +207,15 @@ def requeue_rescrapes() -> int:
     """Move matched/not_outdoor domains back to site_pending when their rescrape date is due.
     Skips human-reviewed domains to preserve manual verdicts."""
     now = datetime.utcnow().isoformat()
+    new_expires = (datetime.utcnow() + timedelta(days=TRACKING_DAYS)).isoformat()
     with closing(_db()) as conn:
         cur = conn.execute(
-            "UPDATE domains SET status = 'site_pending', email_sent_at = NULL "
+            "UPDATE domains SET status = 'site_pending', email_sent_at = NULL, "
+            "enriched_at = NULL, expires_at = ? "
             "WHERE status IN ('matched', 'not_outdoor') "
             "AND next_check_at IS NOT NULL AND next_check_at <= ? "
             "AND human_reviewed = 0",
-            (now,),
+            (new_expires, now),
         )
         conn.commit()
         return cur.rowcount
