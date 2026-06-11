@@ -40,7 +40,8 @@ Lead quality gate:
 - Answer NO for long-running or established organizations, including phrases like "since 1995", "established in 1987", "founded in 1972", "serving for 20 years", "over 30 years", "decades", "generations", "resident-owned community", "55+ community", etc.
 - Answer NO for generic template/starter websites, even if the domain name has an outdoor keyword. Boilerplate product/category text without real business-specific details is not enough.
 - Answer NO for private/member clubs, youth camps, scout camps, nonprofits, associations, and community organizations unless the content clearly shows a new commercial retailer, rental shop, repair shop, resort, campground, marina, manufacturer, or distributor.
-- Score online-only retail (ecommerce store with no physical storefront, no rental venue, no in-person bookings) at most 65. These are lower-priority leads since the broker focuses on physical/activity operations needing liability coverage.
+- Score online-only retail (ecommerce store with no confirmed physical storefront, no rental venue, no in-person bookings) at most 55. These are lower-priority leads since the broker focuses on physical/activity operations needing liability coverage.
+- A business mentioning a city, state, or region ("serving Colorado", "based in Denver", "Minnesota-based") is NOT confirmed physical presence — that describes where the owner lives, not a store customers can visit. Physical presence requires explicit evidence: a street address, "visit us", store hours, "come in", directions to a location, or language clearly about in-person transactions. When there is no such evidence, assume online-only.
 - Score solo/one-person operations (no business entity, no employees, no commercial venue) at most 75.
 
 Note: Commercial outdoor tour and activity operators (TYPE D) qualify on their own — they do not need gear sales or lodging. A hiking tour company, bike tour operator, fishing charter, or any business running paid outdoor trips qualifies.
@@ -84,7 +85,7 @@ SCORE: 0-100
 LOCATION: city, state (if found in content and SCORE >= 50, otherwise leave blank)
 ESTABLISHED: founding year or period if explicitly mentioned in content (e.g. "1987", "since 1995", "over 30 years"), otherwise leave blank
 TEMPLATE: YES if the site uses generic placeholder/template content with no real business-specific details (stock photos, filler text, "coming soon", Wix/Squarespace/WordPress starter pages), NO otherwise
-ECOM_ONLY: YES if this appears to be an online-only retail store (sells products online, ships to customers, no physical storefront/rental venue/booking for in-person activity). NO if there is any physical location, rental operation, guided activity, or in-person service.
+ECOM_ONLY: YES if the business sells products or services online without confirmed physical presence. Physical presence requires explicit evidence in the content: a street address, "visit us" / "stop by", store hours, directions to a location, or language about in-person transactions. A city/state mention, "serving the [region] area", "based in X", or "located in X" alone is NOT physical presence — that describes where the owner is from, not a storefront customers can visit. When in doubt, answer YES (assume online-only).
 REASON: one sentence explaining why"""
 
 OUTDOOR_SPORTS_PROMPT = """You are helping an insurance broker find new outdoor sports businesses in Minnesota
@@ -580,8 +581,8 @@ def classify_domain(domain: str, content: str) -> dict:
     elif _needs_clear_us_location(reason) and not _has_us_signal(location, content) and score >= 70:
         score = min(score, 49)
         reason = "Outdoor lodging/tour lead lacks a clear US location signal"
-    elif ecom_only and score >= 70:
-        score = min(score, 65)
+    elif ecom_only and score >= 56:
+        score = min(score, 55)
 
     match = score >= 70
     return {"match": match, "score": score, "score_category": score_category(score),

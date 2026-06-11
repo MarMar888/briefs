@@ -56,144 +56,221 @@ DOMAIN_RE = re.compile(r"^(?:https?://)?(?:www\.)?([a-z0-9][a-z0-9-]*(?:\.[a-z0-
 # Used as a set for O(1) token lookup in _matches_keywords.
 OUTDOOR_KEYWORDS = {
     # Snow sports
-    "ski", "skiing", "skier", "snowboard", "snowboarding", "snowboarder",
-    "snowshoe", "snowshoeing", "nordic", "telemark", "backcountry", "chalet",
-    # Camping / overlanding
-    "camp", "camping", "camper", "campground", "glamping",
+    "ski", "skiing", "skier", "skis",
+    "snowboard", "snowboarding", "snowboarder",
+    "snowshoe", "snowshoeing", "snowmobile", "snowmobiling", "snowcat",
+    "nordic", "telemark", "backcountry", "chalet", "alpine", "mogul",
+    "sled", "sledding", "tubing",
+    "biathlon", "iceclimb", "iceclimbing", "snowkite", "snowkiting", "snowpark",
+    # Camping / overlanding / RV
+    "camp", "camping", "camper", "campground", "campsite", "glamping",
     "overland", "overlanding", "basecamp", "bivouac",
+    "rv", "cabin", "cabins", "yurt", "yurts", "tipi", "tipis",
+    "backwoods", "hammock",
     # Hunting
-    "hunt", "hunting", "hunter",
+    "hunt", "hunting", "hunter", "hunters",
     "bowhunt", "bowhunting", "bowhunter",
     "waterfowl", "upland", "muzzleloader",
-    "taxidermy", "treestand", "camo", "camouflage",
+    "taxidermy", "treestand", "treestands", "camo", "camouflage",
     "gunclub", "shootingrange", "gunrange", "trapshoot", "trapshooting", "skeet",
-    # Fishing
-    "fish", "fishing", "fisherman", "angler", "angling",
-    "flyfishing", "flyfish", "flyshop", "flyrod", "fly",
-    "icefishing",
-    "trout", "walleye", "muskie", "musky",
-    "tackle", "lure", "bait", "wader", "waders",
-    # Paddle sports
-    "kayak", "kayaking", "paddle", "paddling", "canoe", "canoeing",
-    "raft", "rafting", "whitewater", "rowboat", "marina",
-    # Hiking / trail
-    "hike", "hiking", "hiker", "trail", "trails", "trailhead",
-    "trekking", "trek",
-    # Climbing
-    "climb", "climbing", "climber", "bouldering", "rappel", "rappelling",
-    "canyoneer", "canyoneering",
-    # Biking
-    "mountainbike", "mtb", "bikepacking",
-    # Shooting sports
-    "shoot", "shooting",
-    "firearm", "firearms", "gunsmith",
-    "archery", "archer", "archeryrange",
-    "crossbow", "bowshop",
-    "ammo", "ammunition",
+    "deer", "elk", "turkey", "pheasant", "dove", "duck", "goose", "antler", "antlers",
+    "biggame", "trophy", "game", "gamebird", "wildfowl",
+    "varmint", "predatorcalling", "trapper", "trapping",
+    "falconry", "falconer",
+    "rangefinder", "rangefinders",
+    # Firearms / shooting
+    "gun", "guns", "rifle", "rifles", "shotgun", "shotguns",
+    "pistol", "pistols", "handgun", "handguns", "revolver",
+    "shoot", "shooting", "shooter",
+    "firearm", "firearms", "gunsmith", "gunsmithing",
+    "archery", "archer", "archeryrange", "bowhunter",
+    "crossbow", "bowshop", "bow", "bows",
+    "ammo", "ammunition", "reloading",
     "decoy", "decoys",
+    "gunshop", "gunstore", "armory",
+    "suppressor", "suppressors", "silencer",
+    "holster", "holsters",
+    # Fishing
+    "fish", "fishing", "fisherman", "fishermen", "angler", "angling",
+    "flyfishing", "flyfish", "flyshop", "flyrod", "flytying",
+    "icefishing",
+    "trout", "walleye", "muskie", "musky", "bass", "salmon", "steelhead",
+    "crappie", "bluegill", "catfish", "perch", "pike", "panfish",
+    "tackle", "lure", "lures", "bait", "baits", "wader", "waders",
+    "charter", "charters", "fishingcharter",
+    "reel", "reels",
+    "spey", "tenkara", "nymphing",
+    "bowfishing", "bowfish",
+    "floattrip", "floatfishing",
+    # Diving / underwater
+    "dive", "diving", "diver", "divers",
+    "scuba",
+    "snorkel", "snorkeling",
+    "spearfish", "spearfishing",
+    "freedive", "freediving",
+    # Paddle sports
+    "kayak", "kayaking", "kayaker", "paddle", "paddling", "paddleboard", "paddleboards",
+    "canoe", "canoeing", "canoeist", "sup",
+    "raft", "rafting", "rafter", "whitewater", "rowboat", "marina", "watercraft",
+    "packraft", "packrafting",
+    "float",
+    # Hiking / trail / running
+    "hike", "hiking", "hiker", "hikers", "trail", "trails", "trailhead",
+    "trekking", "trek", "treks", "thru", "backpacker",
+    "trailrun", "trailrunning",
+    # Climbing
+    "climb", "climbing", "climber", "climbers", "bouldering",
+    "rappel", "rappelling", "canyoneer", "canyoneering", "crag",
+    # Caving
+    "caving", "spelunk", "spelunking",
+    # Biking
+    "bike", "bikes", "biking", "biker", "bikers", "cyclist", "cycling",
+    "mountainbike", "mountainbiking", "mtb", "bikepacking", "bikeshop",
+    "cyclocross",
+    # ATV / offroad
+    "atv", "utv", "offroad", "fourwheeler", "dirtbike", "dirtbiking",
+    # Equestrian
+    "horse", "horses", "horseback", "equestrian", "stable", "stables",
+    "ranch", "ranches",
+    "rodeo", "saddle", "saddles",
+    "trailride", "trailriding",
+    # Air / aerial sports
+    "paraglide", "paragliding", "paraglider",
+    "hangglide", "hanggliding",
+    "skydive", "skydiving", "skydiver",
+    "parasail", "parasailing",
+    "gliding", "glider", "soaring",  # sub-tokens when wordninja splits hang/paragliding
+    "kiting",  # sub-token when wordninja splits snowkiting/kitesurfing
+    # Zip / adventure
+    "zipline", "ziplines", "ziplining", "aerial", "ropescourse",
+    "adventure", "adventures", "adventurer", "expedition", "expeditions",
+    # Guiding / outfitting
+    "guide", "guides", "guiding",
+    "outfitter", "outfitters", "outfitting",
     # Gear / retail signals
-    "outfitter", "outfitters",
-    "gunshop", "gunstore",
-    # Venues
-    "lodge",
-    "resort",
+    "gear",
+    "sporting", "sportinggoods",
+    "sport", "sports",
+    "supply", "supplies",
+    "rental", "rentals",
+    "proshop",
+    "tradingpost",
+    "consignment",
+    "closeout", "liquidation",
+    "demo",
+    # Venues / lodging
+    "lodge", "lodges", "lodging",
+    "resort", "resorts",
+    "campground", "campgrounds",
     "sportsman", "sportsmen", "sportswoman", "sportingclub",
     "wilderness",
     "preserve",
-    "retreat",
+    "retreat", "retreats",
     "duckclub", "huntingclub", "fishingclub",
+    "marina", "marinas",
+    "outpost",
+    # Boating / watersports
+    "boat", "boats", "boating", "boater",
+    "sailboat", "pontoon", "johnboat", "bassboat",
+    "dock", "docks", "pier", "launch",
+    "waterski", "waterskiing", "wakeboard", "wakeboarding",
+    "jetski", "waverunner",
+    "surf", "surfing", "surfer", "surfboard",
+    "windsurfing", "kitesurfing", "kitesurf",
+    # Hunting accessories / blinds
+    "groundblind", "huntingblind",
+    "broadhead", "broadheads",
+    "venison", "gameprocessing",
+    "retriever", "spaniel",
+    # Survival / bushcraft
+    "survival", "survivalist", "bushcraft",
+    "prepper", "preppers",
+    "knife", "knives", "blade", "blades",
+    "hatchet", "axe", "axes", "tomahawk",
+    # Mountain biking extras
+    "singletrack", "enduro", "gravel",
+    # Bird watching
+    "birding", "birdwatching", "birder",
+    # Exploration / ecotourism
+    "explore", "explorer", "exploration",
+    "excursion", "excursions",
+    "safari",
+    "ecotour", "ecotourism",
+    # Target sports
+    "paintball", "airsoft",
     # Broad outdoor
     "outdoor", "outdoors",
-    "sporting",
     "backpack", "backpacking",
-    "mountaineer",
+    "mountaineer", "mountaineering",
+    "nature", "naturalist",
+    "wildlife", "wildland", "wildlands",
+    "portage",
+    "mountain", "mountains",
+    "river", "rivers",
+    "lake", "lakes",
+    "forest", "forests",
+    "woods", "woodland",
 }
 
-# Proper-noun / brand-like seeds that word tokenization will not infer.
-# Keep this list curated; broad keyword matching would swamp the queue again.
-OUTDOOR_PROPER_NOUNS = {
-    "piragis",
-    "backcountry",
-    "cabelas",
-    "basspro",
-    "orvis",
-    "sitka",
-    "kuiu",
-    "simms",
-    "patagonia",
-    "arcteryx",
-    "blackdiamond",
-    "bigagnes",
-    "osprey",
-    "marmot",
-    "salomon",
-    "burton",
-    "rossignol",
-    "rapala",
-    "shimano",
-    "fenwick",
-    "sage",
-    "redington",
-    "gloomis",
-    "stcroix",
-    "vortex",
-    "leupold",
-    "browning",
-    "benelli",
-    "mathews",
-    "hoyt",
-    "pse",
-    "yeti",
-    "pelican",
-    "hobie",
-    "nrs",
-    "yakima",
-    "thule",
-    "kuat",
-    "deuter",
-    "kelty",
-    "thermarest",
-    "msr",
-    "nemo",
-    "hydroflask",
-    "smartwool",
-    "icebreaker",
-    "prana",
-    "chaco",
-    "teva",
-    "keen",
-    "merrell",
-    "danner",
-    "oboz",
-    "hoka",
-    "saucony",
-    "lasportiva",
-    "scarpa",
-    "petzl",
-    "edelrid",
-    "metolius",
-    "mammut",
-    "volkl",
-    "k2",
-    "armada",
-    "libtech",
-    "nitro",
-    "arbor",
+# Broad set of proper nouns (animals, landscape, plants, minerals, regional terms).
+# Any domain whose wordninja tokens contain one of these — and no generic business
+# descriptor — is passed to the geo/scrape phase. Cast wide; LLM filters non-outdoor.
+PROPER_NOUNS = {
+    # Animals
+    "moose", "elk", "bear", "deer", "wolf", "fox", "coyote", "bison", "buffalo",
+    "ram", "buck", "doe", "stag", "boar", "hog",
+    "eagle", "hawk", "falcon", "kestrel", "osprey", "heron", "loon", "crane",
+    "owl", "raven", "crow", "jay", "wren", "swift", "harrier",
+    "duck", "goose", "pheasant", "grouse", "turkey", "quail", "woodcock", "snipe",
+    "trout", "bass", "pike", "salmon", "walleye", "perch", "muskie", "crappie",
+    "catfish", "carp", "steelhead", "char", "tench",
+    "cougar", "lynx", "bobcat", "panther", "puma",
+    "otter", "beaver", "mink", "marten", "wolverine", "badger", "muskrat", "weasel",
+    "bison", "musk", "caribou", "pronghorn", "bighorn",
+    # Landscape / geography
+    "ridge", "valley", "creek", "lake", "river", "pond", "bay", "cove",
+    "inlet", "harbor", "peak", "summit", "bluff", "cliff", "canyon", "gorge",
+    "gulch", "ravine", "hollow", "meadow", "prairie", "tundra", "rapids",
+    "falls", "shore", "marsh", "delta", "dune", "glen", "fen", "moor",
+    "heath", "tor", "knoll", "butte", "mesa", "bench", "flats", "crossing",
+    "fork", "bend", "run", "slough", "swamp", "bog",
+    # Plants / trees
+    "pine", "birch", "cedar", "spruce", "maple", "oak", "ash", "hemlock",
+    "fir", "aspen", "willow", "alder", "cottonwood", "sage", "juniper",
+    "hickory", "walnut", "chestnut", "beech", "elm", "larch", "tamarack",
+    "locust", "sycamore", "poplar", "basswood", "ironwood",
+    # Minerals / materials
+    "granite", "flint", "iron", "copper", "silver", "slate", "obsidian",
+    "quartz", "basalt", "shale", "amber", "jasper", "feldspar", "limestone",
+    # Regional / geographic descriptors
+    "northwoods", "northwood", "boundary", "portage", "voyageur", "quetico",
+    "boreal", "highland", "lowland", "tidewater", "piedmont", "chaparral",
+    "savanna", "steppe",
 }
 
+# Generic business descriptor tokens — if any are present, the proper-noun rule
+# does not apply (the domain is likely a non-outdoor service business).
+_GENERIC_BUSINESS_TOKENS = {
+    "services", "service", "consulting", "consultant", "solutions", "solution",
+    "systems", "system", "tech", "technology", "technologies", "digital",
+    "media", "marketing", "design", "designs", "financial", "finance",
+    "realty", "realtor", "dental", "medical", "health", "healthcare",
+    "legal", "attorney", "law", "auto", "automotive", "construction",
+    "electric", "electrical", "plumbing", "cleaning", "management",
+    "agency", "software", "hosting", "staffing", "recruiting", "logistics",
+    "accounting", "mortgage", "roofing", "flooring", "painting", "landscaping",
+    "pest", "hvac", "insurance",
+}
 
 # Domain label suffixes that indicate directories/aggregators, not actual businesses.
-_DIRECTORY_SUFFIXES = {"finder", "directory", "listings", "locator", "search", "finder"}
-
-# Suffixes that, when paired with a known brand name, signal a copycat site.
-_COPYCAT_SUFFIXES = {"official", "store", "shop", "outlet", "sale", "deals", "discount", "cheap"}
+_DIRECTORY_SUFFIXES = {"finder", "directory", "listings", "locator", "search"}
 
 
 def _is_junk_domain(domain: str) -> bool:
     """Return True for domain patterns that are structurally junk before scraping."""
     label = domain.rsplit(".", 1)[0].lower()
 
-    # Double hyphens are a strong counterfeit signal (e.g. osprey--backpacks.com)
+    # Double hyphens are a strong counterfeit signal (e.g. brand--name.com)
     if "--" in label:
         return True
 
@@ -203,39 +280,37 @@ def _is_junk_domain(domain: str) -> bool:
     if parts and parts[-1] in _DIRECTORY_SUFFIXES:
         return True
 
-    # Known brand + copycat suffix (e.g. salomonofficial, arcteryx-store)
-    compact = "".join(parts)
-    for proper_noun in OUTDOOR_PROPER_NOUNS:
-        if len(proper_noun) >= 5 and proper_noun in compact:
-            remainder = compact.replace(proper_noun, "")
-            if remainder in _COPYCAT_SUFFIXES:
-                return True
-
     return False
 
 
 def _matches_keywords(domain: str) -> bool:
-    """Return True if wordninja tokens or curated proper-noun seeds match."""
+    """Return True if the domain should be scraped.
+
+    Default path: any proper noun token (animal, landscape, plant, mineral,
+    regional term) with no generic business descriptor present.
+    Keyword path: explicit outdoor activity word (kept as additional signal).
+    Either path triggers inclusion.
+    """
     if _is_junk_domain(domain):
         return False
 
     label = domain.rsplit(".", 1)[0].lower()
     parts = [part for part in re.split(r"[^a-z0-9]+", label) if part]
-    compact = "".join(parts)
 
-    if compact in OUTDOOR_KEYWORDS or any(part in OUTDOOR_KEYWORDS for part in parts):
+    # Tokenize all hyphen/number-separated parts together
+    all_tokens: list[str] = []
+    for part in parts:
+        all_tokens.extend(wordninja.split(part) or [part])
+
+    # Default path: proper noun present, no generic business descriptor
+    if (any(t in PROPER_NOUNS for t in all_tokens)
+            and not any(t in _GENERIC_BUSINESS_TOKENS for t in all_tokens)):
         return True
 
-    for proper_noun in OUTDOOR_PROPER_NOUNS:
-        if compact == proper_noun or compact.startswith(f"the{proper_noun}"):
-            return True
-        if len(proper_noun) >= 5 and (compact.startswith(proper_noun) or compact.endswith(proper_noun)):
-            return True
+    # Keyword path: explicit outdoor activity word
+    if any(t in OUTDOOR_KEYWORDS for t in all_tokens):
+        return True
 
-    for part in parts:
-        for token in wordninja.split(part):
-            if token in OUTDOOR_KEYWORDS:
-                return True
     return False
 
 
@@ -552,10 +627,11 @@ def _geolocate_ips(ips: list[str]) -> dict[str, str]:
     return country_by_ip
 
 
-def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter: bool = False) -> None:
+def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter: bool = False) -> dict:
+    """Run geo phase. Returns counts: geo_us, geo_non_us, geo_failed."""
     due = domain_store.get_due(["new", "geo_pending"])
     if not due:
-        return
+        return {"geo_us": 0, "geo_non_us": 0, "geo_failed": 0}
 
     if keyword_filter:
         now = datetime.utcnow().isoformat()
@@ -572,7 +648,7 @@ def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter:
     if geo_limit > 0:
         due = due[:geo_limit]
     if not due:
-        return
+        return {"geo_us": 0, "geo_non_us": 0, "geo_failed": 0}
     print(f"[domain_scanner] Geo phase: {len(due)} domains", flush=True)
 
     ip_by_domain = _resolve_domains([r["domain"] for r in due])
@@ -580,6 +656,7 @@ def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter:
 
     country_by_ip = _geolocate_ips(sorted(set(ip_by_domain.values())))
 
+    geo_us = geo_non_us = geo_failed = 0
     for row in due:
         domain = row["domain"]
         now = datetime.utcnow().isoformat()
@@ -587,23 +664,29 @@ def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter:
         ip = ip_by_domain.get(domain)
 
         if not ip:
+            geo_failed += 1
             domain_store.update_domain(domain, status="geo_pending", last_checked_at=now, attempt_count=count)
             continue
 
         country = country_by_ip.get(ip)
         if not country:
+            geo_failed += 1
             domain_store.update_domain(domain, status="geo_pending", resolved_ip=ip,
                                        last_checked_at=now, attempt_count=count)
             continue
 
         if country != "US":
+            geo_non_us += 1
             domain_store.update_domain(domain, status="non_us", resolved_ip=ip, country_code=country,
                                        last_checked_at=now, attempt_count=count)
         else:
+            geo_us += 1
             next_check = (datetime.utcnow() + timedelta(days=defer_site_days)).isoformat() if defer_site_days else None
             domain_store.update_domain(domain, status="site_pending", resolved_ip=ip, country_code="US",
                                        website_url=f"https://{domain}", next_check_at=next_check,
                                        last_checked_at=now, attempt_count=count)
+
+    return {"geo_us": geo_us, "geo_non_us": geo_non_us, "geo_failed": geo_failed}
 
 
 def _check_domain(row: dict) -> dict:
@@ -638,10 +721,10 @@ def _parse_iso(value: str | None) -> datetime | None:
         return None
 
 
-def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 30) -> list[Filing]:
+def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 30) -> tuple[list[Filing], dict]:
     due = domain_store.get_due(["site_pending"])
     if not due:
-        return []
+        return [], {"random_processed": 0, "random_matched": 0, "keyword_processed": 0, "keyword_matched": 0}
     if site_limit > 0:
         due = due[:site_limit]
     total = len(due)
@@ -649,6 +732,10 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
 
     matched: list[Filing] = []
     completed = 0
+    random_processed = sum(1 for r in due if r.get("random_sample"))
+    random_matched = 0
+    site_not_outdoor = 0
+    site_pending_retry = 0
 
     with ThreadPoolExecutor(max_workers=SITE_WORKERS) as executor:
         futures = {executor.submit(_check_domain, row): row for row in due}
@@ -682,6 +769,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
                         f"(retry in {interval_days}d)",
                         flush=True,
                     )
+                    site_pending_retry += 1
                     domain_store.update_domain(domain, status="site_pending",
                                                last_error=result["pending_reason"],
                                                redirected_to=result.get("redirected_to", ""),
@@ -724,6 +812,8 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
                                            phone=phone, email=email,
                                            next_check_at=next_rescrape,
                                            classified_at=now, last_checked_at=now, attempt_count=count)
+                if row.get("random_sample"):
+                    random_matched += 1
                 matched.append(Filing(
                     name=domain, city=location, filing_date=filing_date,
                     website=url, verdict=result["verdict"],
@@ -738,6 +828,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
                                                last_error="classification error",
                                                last_checked_at=now, attempt_count=count)
                     continue
+                site_not_outdoor += 1
                 score     = v.get("score", 0)
                 score_cat = v.get("score_category", "")
                 score_tag = f" [{score_cat}:{score}]" if score >= 40 else ""
@@ -753,7 +844,18 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
                                            next_check_at=next_rescrape,
                                            classified_at=now, last_checked_at=now, attempt_count=count)
 
-    return matched
+    keyword_processed = total - random_processed
+    keyword_matched = len(matched) - random_matched
+    site_stats = {
+        "site_processed": total,
+        "site_not_outdoor": site_not_outdoor,
+        "site_pending_retry": site_pending_retry,
+        "random_processed": random_processed,
+        "random_matched": random_matched,
+        "keyword_processed": keyword_processed,
+        "keyword_matched": keyword_matched,
+    }
+    return matched, site_stats
 
 
 def scan_new_domains(
@@ -805,6 +907,9 @@ def scan_new_domains(
 
     downloaded_total = 0
     inserted_total = 0
+    tld_total = 0
+    keyword_total = 0
+    random_inserted = 0
 
     if skip_import:
         print("[domain_scanner] Skipping domain import; resuming queued domains from SQLite", flush=True)
@@ -834,9 +939,8 @@ def scan_new_domains(
                 daily = fetcher(date)
                 batches.append((date.strftime("%Y-%m-%d"), daily))
 
-        filtered_domains: list[tuple[str, str]] = []
-        tld_total = 0
-        keyword_total = 0
+        all_tld_filtered: list[tuple[str, str]] = []  # all .com/.net/.us domains
+        keyword_matched_domains: list[tuple[str, str]] = []
         for source_date, raw in batches:
             downloaded_total += len(raw)
             print(f"[domain_scanner]   {source_date}: {len(raw)} domains loaded", flush=True)
@@ -845,40 +949,87 @@ def scan_new_domains(
             tld_total += len(tld_ok)
 
             if keyword_filter:
-                tld_ok = _keyword_filter_domains(tld_ok, workers=keyword_workers)
-            keyword_total += len(tld_ok)
-            filtered_domains.extend((source_date, domain) for domain in tld_ok)
+                kw = _keyword_filter_domains(tld_ok, workers=keyword_workers)
+                keyword_matched_domains.extend((source_date, d) for d in kw)
+                all_tld_filtered.extend((source_date, d) for d in tld_ok)
+            else:
+                keyword_matched_domains.extend((source_date, d) for d in tld_ok)
 
-        random.shuffle(filtered_domains)
+        keyword_total = len(keyword_matched_domains)
+
+        # Insert keyword-matched domains (subject to limit)
+        random.shuffle(keyword_matched_domains)
         if limit > 0:
-            filtered_domains = filtered_domains[:limit]
+            keyword_matched_domains = keyword_matched_domains[:limit]
 
         domains_by_date: dict[str, list[str]] = {}
-        for source_date, domain in filtered_domains:
+        for source_date, domain in keyword_matched_domains:
             domains_by_date.setdefault(source_date, []).append(domain)
         for source_date, domains in domains_by_date.items():
-            inserted_total += domain_store.upsert_new(domains, source_date)
+            inserted_total += domain_store.upsert_new(domains, source_date, random_sample=False)
+
+        # Random sample from non-keyword domains — gives opaque brand names a shot at classification.
+        # Set RANDOM_SAMPLE_SIZE=0 to disable. Tracked separately in hit-rate logs so you can see
+        # whether the random sample is finding leads that keyword filter would have missed.
+        if keyword_filter:
+            random_sample_size = int(os.environ.get("RANDOM_SAMPLE_SIZE", "750"))
+            if random_sample_size > 0:
+                keyword_set = {d for _, d in keyword_matched_domains}
+                non_keyword = [(sd, d) for sd, d in all_tld_filtered if d not in keyword_set]
+                sample = random.sample(non_keyword, min(random_sample_size, len(non_keyword)))
+                print(f"[domain_scanner] Random sample: {len(sample)} non-keyword domains added", flush=True)
+                sample_by_date: dict[str, list[str]] = {}
+                for source_date, domain in sample:
+                    sample_by_date.setdefault(source_date, []).append(domain)
+                for source_date, domains in sample_by_date.items():
+                    n = domain_store.upsert_new(domains, source_date, random_sample=True)
+                    random_inserted += n
+                    inserted_total += n
 
         print(f"[domain_scanner] {downloaded_total} domains loaded total", flush=True)
         print(f"[domain_scanner] {tld_total} after TLD filter", flush=True)
         if keyword_filter:
             print(f"[domain_scanner] {keyword_total} after keyword filter", flush=True)
+            if random_inserted:
+                print(f"[domain_scanner] {random_inserted} random-sample domains added", flush=True)
         print(f"[domain_scanner] {inserted_total} new domains added to queue", flush=True)
 
     # 3. Geo phase: new + geo_pending → site_pending or non_us
+    geo_stats: dict = {"geo_us": 0, "geo_non_us": 0, "geo_failed": 0}
     if skip_geo:
         print("[domain_scanner] Skipping geo phase", flush=True)
     else:
-        _run_geo_phase(defer_site_days=defer_site_days, geo_limit=geo_limit, keyword_filter=keyword_filter)
+        geo_stats = _run_geo_phase(defer_site_days=defer_site_days, geo_limit=geo_limit, keyword_filter=keyword_filter)
 
     # 4. Site phase: site_pending → matched or not_outdoor
     filing_date = today.strftime("%m/%d/%Y")
-    matched = _run_site_phase(filing_date, site_limit=site_limit, rescrape_days=rescrape_days)
+    matched, site_stats = _run_site_phase(filing_date, site_limit=site_limit, rescrape_days=rescrape_days)
     print(f"[domain_scanner] {len(matched)} newly matched domains", flush=True)
+
+    # Log random sample vs keyword effectiveness so we can evaluate whether the sample is pulling weight
+    if site_stats["random_processed"] > 0:
+        rs_pct = 100 * site_stats["random_matched"] / site_stats["random_processed"]
+        print(
+            f"[domain_scanner] Random sample hit rate: "
+            f"{site_stats['random_matched']}/{site_stats['random_processed']} ({rs_pct:.1f}%)",
+            flush=True,
+        )
+    if site_stats["keyword_processed"] > 0:
+        kw_pct = 100 * site_stats["keyword_matched"] / site_stats["keyword_processed"]
+        print(
+            f"[domain_scanner] Keyword match hit rate: "
+            f"{site_stats['keyword_matched']}/{site_stats['keyword_processed']} ({kw_pct:.1f}%)",
+            flush=True,
+        )
 
     stats = {
         "downloaded": downloaded_total,
+        "tld_filtered": tld_total,
+        "keyword_filtered": keyword_total,
+        "random_inserted": random_inserted,
         "inserted": inserted_total,
+        **geo_stats,
+        **site_stats,
         "matched": len(matched),
         "expired": expired,
     }

@@ -306,6 +306,15 @@ tr:last-child td {
   color: var(--red);
 }
 
+.iconButton.star {
+  color: var(--muted);
+}
+
+.iconButton.star.starred {
+  background: #fff8e0;
+  color: #c98a00;
+}
+
 .verdict.none {
   background: #eef0ed;
   color: var(--muted);

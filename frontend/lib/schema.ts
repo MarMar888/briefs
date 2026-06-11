@@ -45,7 +45,8 @@ export const domains = sqliteTable("domains", {
   emailSentAt: text("email_sent_at"),
   humanReviewed: integer("human_reviewed", { mode: "boolean" }).notNull().default(false),
   humanVerdict: text("human_verdict"),
-  humanReviewNotes: text("human_review_notes")
+  humanReviewNotes: text("human_review_notes"),
+  starred: integer("starred", { mode: "boolean" }).notNull().default(false)
 });
 
 export type Domain = typeof domains.$inferSelect;

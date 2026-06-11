@@ -77,6 +77,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Se
             <option value="yes">Reviewed</option>
             <option value="approved">Approved</option>
             <option value="rejected">Rejected</option>
+            <option value="starred">Starred</option>
           </select>
         </label>
         <button className="textButton" type="submit">
@@ -132,6 +133,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Se
                     domain={lead.domain}
                     initialVerdict={lead.humanVerdict}
                     initialNotes={lead.humanReviewNotes}
+                    initialStarred={lead.starred ?? false}
                   />
                 </td>
               </tr>

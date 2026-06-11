@@ -6,7 +6,7 @@ export type LeadFilters = {
   minScore?: number;
   maxScore?: number;
   ecomOnly?: "all" | "yes" | "no";
-  reviewed?: "all" | "yes" | "no" | "approved" | "rejected";
+  reviewed?: "all" | "yes" | "no" | "approved" | "rejected" | "starred";
 };
 
 export async function getLeadStats() {
@@ -55,6 +55,8 @@ export async function getMatchedLeads(filters: LeadFilters) {
     clauses.push(eq(domains.humanVerdict, "approved"));
   } else if (filters.reviewed === "rejected") {
     clauses.push(eq(domains.humanVerdict, "rejected"));
+  } else if (filters.reviewed === "starred") {
+    clauses.push(eq(domains.starred, true));
   }
 
   return db
@@ -82,14 +84,23 @@ export async function getPipelineRuns(limit = 100) {
     .limit(limit);
 }
 
-export async function reviewDomain(domain: string, verdict: "approved" | "rejected", notes: string) {
+export async function toggleStar(domain: string, starred: boolean) {
   await getDb()
     .update(domains)
-    .set({
-      humanReviewed: true,
-      humanVerdict: verdict,
-      humanReviewNotes: notes,
-      lastSeenAt: new Date().toISOString()
-    })
+    .set({ starred, lastSeenAt: new Date().toISOString() })
     .where(eq(domains.domain, domain));
+}
+
+export async function reviewDomain(domain: string, verdict: "approved" | "rejected" | null, notes: string) {
+  if (verdict !== null) {
+    await getDb()
+      .update(domains)
+      .set({ humanReviewed: true, humanVerdict: verdict, humanReviewNotes: notes, lastSeenAt: new Date().toISOString() })
+      .where(eq(domains.domain, domain));
+  } else {
+    await getDb()
+      .update(domains)
+      .set({ humanReviewNotes: notes, lastSeenAt: new Date().toISOString() })
+      .where(eq(domains.domain, domain));
+  }
 }

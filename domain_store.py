@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS domains (
     email_sent_at         TEXT,
     human_reviewed        INTEGER NOT NULL DEFAULT 0,
     human_verdict         TEXT,
-    human_review_notes    TEXT
+    human_review_notes    TEXT,
+    random_sample         INTEGER NOT NULL DEFAULT 0
 )
 """
 
@@ -71,7 +72,8 @@ SELECT
     enriched_at,
     classification_reason  AS reason,
     classified_at,
-    source_date
+    source_date,
+    random_sample
 FROM domains
 WHERE status = 'matched'
 ORDER BY ecom_only ASC, score DESC, is_template ASC, classified_at DESC
@@ -79,18 +81,53 @@ ORDER BY ecom_only ASC, score DESC, is_template ASC, classified_at DESC
 
 _RUNS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS pipeline_runs (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    started_at     TEXT NOT NULL,
-    finished_at    TEXT,
-    source         TEXT,
-    status         TEXT NOT NULL DEFAULT 'running',
-    downloaded     INTEGER,
-    inserted       INTEGER,
-    matched        INTEGER,
-    expired        INTEGER,
-    error          TEXT
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at          TEXT NOT NULL,
+    finished_at         TEXT,
+    source              TEXT,
+    status              TEXT NOT NULL DEFAULT 'running',
+    -- ingestion funnel
+    downloaded          INTEGER,
+    tld_filtered        INTEGER,
+    keyword_filtered    INTEGER,
+    random_inserted     INTEGER,
+    inserted            INTEGER,
+    -- geo phase
+    geo_us              INTEGER,
+    geo_non_us          INTEGER,
+    geo_failed          INTEGER,
+    -- site phase totals
+    site_processed      INTEGER,
+    matched             INTEGER,
+    site_not_outdoor    INTEGER,
+    site_pending_retry  INTEGER,
+    -- random sample effectiveness (subset of site phase)
+    random_processed    INTEGER,
+    random_matched      INTEGER,
+    -- keyword match effectiveness (subset of site phase)
+    keyword_processed   INTEGER,
+    keyword_matched     INTEGER,
+    -- housekeeping
+    expired             INTEGER,
+    error               TEXT
 )
 """
+
+_RUNS_MIGRATIONS = [
+    "ALTER TABLE pipeline_runs ADD COLUMN tld_filtered INTEGER",
+    "ALTER TABLE pipeline_runs ADD COLUMN keyword_filtered INTEGER",
+    "ALTER TABLE pipeline_runs ADD COLUMN random_inserted INTEGER",
+    "ALTER TABLE pipeline_runs ADD COLUMN geo_us INTEGER",
+    "ALTER TABLE pipeline_runs ADD COLUMN geo_non_us INTEGER",
+    "ALTER TABLE pipeline_runs ADD COLUMN geo_failed INTEGER",
+    "ALTER TABLE pipeline_runs ADD COLUMN site_processed INTEGER",
+    "ALTER TABLE pipeline_runs ADD COLUMN site_not_outdoor INTEGER",
+    "ALTER TABLE pipeline_runs ADD COLUMN site_pending_retry INTEGER",
+    "ALTER TABLE pipeline_runs ADD COLUMN random_processed INTEGER",
+    "ALTER TABLE pipeline_runs ADD COLUMN random_matched INTEGER",
+    "ALTER TABLE pipeline_runs ADD COLUMN keyword_processed INTEGER",
+    "ALTER TABLE pipeline_runs ADD COLUMN keyword_matched INTEGER",
+]
 
 _MIGRATIONS = [
     "ALTER TABLE domains ADD COLUMN location TEXT",
@@ -111,6 +148,8 @@ _MIGRATIONS = [
     "ALTER TABLE domains ADD COLUMN owner_name TEXT",
     "ALTER TABLE domains ADD COLUMN full_address TEXT",
     "ALTER TABLE domains ADD COLUMN enriched_at TEXT",
+    "ALTER TABLE domains ADD COLUMN random_sample INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE domains ADD COLUMN starred INTEGER NOT NULL DEFAULT 0",
 ]
 
 
@@ -136,7 +175,7 @@ def init_db() -> None:
     with closing(_db()) as conn:
         conn.execute(_SCHEMA)
         conn.execute(_RUNS_SCHEMA)
-        for sql in _MIGRATIONS:
+        for sql in _MIGRATIONS + _RUNS_MIGRATIONS:
             try:
                 conn.execute(sql)
             except Exception:
@@ -146,19 +185,20 @@ def init_db() -> None:
         conn.commit()
 
 
-def upsert_new(domains: list[str], source_date: str) -> int:
+def upsert_new(domains: list[str], source_date: str, random_sample: bool = False) -> int:
     """Insert domains that don't exist yet. Returns count inserted."""
     now_dt = datetime.utcnow()
     now = now_dt.isoformat()
     expires_at = (now_dt + timedelta(days=TRACKING_DAYS)).isoformat()
+    rs_flag = 1 if random_sample else 0
     inserted = 0
     with closing(_db()) as conn:
         for domain in domains:
             cur = conn.execute(
                 "INSERT OR IGNORE INTO domains "
-                "(domain, source_date, first_seen_at, last_seen_at, expires_at, status) "
-                "VALUES (?, ?, ?, ?, ?, 'new')",
-                (domain, source_date, now, now, expires_at),
+                "(domain, source_date, first_seen_at, last_seen_at, expires_at, status, random_sample) "
+                "VALUES (?, ?, ?, ?, ?, 'new', ?)",
+                (domain, source_date, now, now, expires_at, rs_flag),
             )
             inserted += cur.rowcount
         conn.commit()
@@ -310,15 +350,41 @@ def finish_run(
     inserted: int,
     expired: int,
     error: str | None = None,
+    tld_filtered: int | None = None,
+    keyword_filtered: int | None = None,
+    random_inserted: int | None = None,
+    geo_us: int | None = None,
+    geo_non_us: int | None = None,
+    geo_failed: int | None = None,
+    site_processed: int | None = None,
+    site_not_outdoor: int | None = None,
+    site_pending_retry: int | None = None,
+    random_processed: int | None = None,
+    random_matched: int | None = None,
+    keyword_processed: int | None = None,
+    keyword_matched: int | None = None,
 ) -> None:
     now = datetime.utcnow().isoformat()
     status = "error" if error else "done"
     with closing(_db()) as conn:
         conn.execute(
             "UPDATE pipeline_runs "
-            "SET finished_at=?, status=?, downloaded=?, inserted=?, matched=?, expired=?, error=? "
+            "SET finished_at=?, status=?, downloaded=?, tld_filtered=?, keyword_filtered=?, "
+            "random_inserted=?, inserted=?, geo_us=?, geo_non_us=?, geo_failed=?, "
+            "site_processed=?, matched=?, site_not_outdoor=?, site_pending_retry=?, "
+            "random_processed=?, random_matched=?, keyword_processed=?, keyword_matched=?, "
+            "expired=?, error=? "
             "WHERE id=?",
-            (now, status, downloaded, inserted, matched, expired, error, run_id),
+            (
+                now, status,
+                downloaded, tld_filtered, keyword_filtered,
+                random_inserted, inserted,
+                geo_us, geo_non_us, geo_failed,
+                site_processed, matched, site_not_outdoor, site_pending_retry,
+                random_processed, random_matched, keyword_processed, keyword_matched,
+                expired, error,
+                run_id,
+            ),
         )
         conn.commit()
 
