@@ -1,4 +1,4 @@
-name: Classify Pending Sites
+name: Backfill Queue
 
 on:
   schedule:
@@ -14,6 +14,11 @@ on:
         description: "Max new/geo_pending domains to geo-check this run (0 = no limit)"
         required: false
         default: "0"
+
+# Shared with Live Ingest Loop + Lead Audit so the three never run at once.
+concurrency:
+  group: lead-pipeline
+  cancel-in-progress: false
 
 jobs:
   backfill:

@@ -7,7 +7,7 @@ export type LeadFilters = {
   maxScore?: number;
   ecomOnly?: "all" | "yes" | "no";
   reviewed?: "all" | "yes" | "no" | "approved" | "rejected" | "starred";
-  audit?: "all" | "qualified" | "filtered" | "unaudited";
+  audit?: "active" | "all" | "qualified" | "filtered" | "unaudited";
 };
 
 export async function getLeadStats() {
@@ -34,17 +34,19 @@ export async function getLeadStats() {
 
 export async function getMatchedLeads(filters: LeadFilters) {
   const db = getDb();
-  // "filtered" shows leads the deep-search audit demoted out of the matched set;
-  // everything else looks at the live matched leads.
-  const clauses =
-    filters.audit === "filtered"
-      ? [eq(domains.status, "audit_rejected")]
-      : [eq(domains.status, "matched")];
+  // All leads stay status=matched; the audit labels them (it never deletes).
+  // Default "active" hides audit-disqualified leads (established / side project);
+  // "filtered" surfaces exactly those for inspection.
+  const clauses = [eq(domains.status, "matched")];
 
-  if (filters.audit === "qualified") {
+  if (filters.audit === "filtered") {
+    clauses.push(eq(domains.auditVerdict, "disqualified"));
+  } else if (filters.audit === "qualified") {
     clauses.push(eq(domains.auditVerdict, "qualified"));
   } else if (filters.audit === "unaudited") {
     clauses.push(sql`${domains.enrichedAt} is null`);
+  } else if (filters.audit !== "all") {
+    clauses.push(sql`(${domains.auditVerdict} is null or ${domains.auditVerdict} <> 'disqualified')`);
   }
 
   if (typeof filters.minScore === "number") {

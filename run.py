@@ -111,11 +111,13 @@ def main():
         filings.extend(domain_filings)
 
         # Second-stage filter: deep-search audit runs BEFORE alerting so only
-        # audit-passed leads are emailed. Disqualified leads (established
-        # businesses / side projects) are demoted out of the matched set here.
+        # audit-qualified leads are emailed. Bounded so a large match batch can't
+        # blow this run's time budget — the standalone Lead Audit job drains the
+        # rest. Disqualified leads stay in the DB, just suppressed (see enricher).
         from enricher import run_enrichment
-        print("[run] Running deep-search audit on newly matched leads...")
-        run_enrichment()
+        inline_audit_limit = int(os.environ.get("INLINE_AUDIT_LIMIT", "200"))
+        print(f"[run] Running deep-search audit on newly matched leads (limit {inline_audit_limit})...")
+        run_enrichment(limit=inline_audit_limit)
 
         unalerted = domain_store.get_unalerted_matches()
         if unalerted and send_match_alerts(unalerted):

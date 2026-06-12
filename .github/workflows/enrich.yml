@@ -1,4 +1,4 @@
-name: Enrich Matched Leads
+name: Lead Audit
 
 on:
   schedule:
@@ -10,6 +10,11 @@ on:
         description: "Max domains to enrich this run (0 = no limit)"
         required: false
         default: "0"
+
+# Shared with Live Ingest Loop + Backfill Queue so the three never run at once.
+concurrency:
+  group: lead-pipeline
+  cancel-in-progress: false
 
 jobs:
   enrich:

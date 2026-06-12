@@ -41,12 +41,6 @@ _ENRICH_WORKERS = int(os.environ.get("ENRICH_WORKERS", "4"))
 _LLM_RETRIES = 4
 _MAX_AUDIT_PAGES = int(os.environ.get("ENRICH_MAX_PAGES", "5"))
 _MAX_CONTENT_CHARS = int(os.environ.get("ENRICH_MAX_CHARS", "9000"))
-# When true (default) the audit demotes leads it disqualifies (established
-# businesses / side projects) out of the matched set so they stop reaching the
-# dashboard. Set ENRICH_AUTOREJECT=0 to only flag without demoting.
-_AUTOREJECT = os.environ.get("ENRICH_AUTOREJECT", "1") != "0"
-_AUDIT_REJECTED_STATUS = "audit_rejected"
-
 # Off-site search: looks the business up on the open web (directories, social,
 # reviews, news) for age/size signals the site itself may not state. Works
 # keyless via DuckDuckGo by default; set BRAVE_SEARCH_API_KEY or SERPAPI_API_KEY
@@ -714,21 +708,20 @@ def _enrich_row(row: dict) -> tuple[str, dict]:
     content, html = _fetch_pages(url)
 
     # Off-site search adds external age/size signals (directories, social, reviews).
+    # The LLM sees it; the deterministic checks below do NOT (a stray year in a
+    # directory snippet must never auto-disqualify a new lead — see README).
     external = _external_signals(domain, html, row.get("location") or "")
     audit_content = content
     if external:
         audit_content = f"{content}\n\n=== EXTERNAL SEARCH RESULTS ===\n{external}"
 
     info = _extract_info(audit_content) if audit_content.strip() else {}
-    info = _build_audit(info, audit_content, html)
+    info = _build_audit(info, content, html)  # deterministic checks on site content only
     info["enriched_at"] = datetime.utcnow().isoformat()
 
-    # Apply the filter: demote disqualified leads out of the matched set unless a
-    # human has already reviewed them (preserve manual verdicts).
-    if (_AUTOREJECT and info.get("audit_verdict") == "disqualified"
-            and not row.get("human_reviewed")):
-        info["status"] = _AUDIT_REJECTED_STATUS
-
+    # Label, don't kill: disqualified leads keep status=matched with audit_verdict
+    # set. They're suppressed from the default dashboard view and from alerts, never
+    # deleted or moved to a terminal state (see README "Design Principles").
     return domain, info
 
 
@@ -756,10 +749,10 @@ def run_enrichment(limit: int = 0) -> int:
             domain, info = future.result()
             domain_store.update_domain(domain, **info)
             enriched += 1
-            demoted = info.get("status") == _AUDIT_REJECTED_STATUS
-            if demoted:
+            disqualified = info.get("audit_verdict") == "disqualified"
+            if disqualified:
                 rejected += 1
-            mark = "✗ FILTERED" if demoted else "✓ kept"
+            mark = "✗ suppressed" if disqualified else "✓ kept"
             bits = []
             if info.get("owner_name"):
                 bits.append(f"owner: {info['owner_name']}")
@@ -771,7 +764,7 @@ def run_enrichment(limit: int = 0) -> int:
             print(f"[enricher] {mark} {domain}{tag}", flush=True)
 
     kept = enriched - rejected
-    print(f"[enricher] Done — {enriched} audited: {kept} kept, {rejected} filtered out", flush=True)
+    print(f"[enricher] Done — {enriched} audited: {kept} qualified, {rejected} suppressed (kept in DB, hidden from default view + alerts)", flush=True)
 
     if _search_attempts:
         pct = 100 * _throttle_count / _search_attempts

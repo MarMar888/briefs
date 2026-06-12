@@ -1,9 +1,15 @@
-name: Ingest New Domains
+name: Live Ingest Loop
 
 on:
   schedule:
     - cron: "0 11 * * *"
   workflow_dispatch:
+
+# Shared with Backfill Queue + Lead Audit so the three never run at once
+# (they touch the same matched backlog — overlap = double LLM spend + more throttling).
+concurrency:
+  group: lead-pipeline
+  cancel-in-progress: false
 
 jobs:
   pipeline:
