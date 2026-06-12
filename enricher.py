@@ -593,7 +593,7 @@ def _extract_info(content: str) -> dict:
 
     client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
     model = os.environ.get("OPENROUTER_ENRICH_MODEL") or os.environ.get(
-        "OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct"
+        "OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct"
     )
 
     for attempt in range(1, _LLM_RETRIES + 1):
@@ -644,7 +644,14 @@ def _parse_response(raw: str) -> dict:
 
 _YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
 _COPYRIGHT_RE = re.compile(r"(?:©|\(c\)|copyright)\s*[\d\s,–-]*?((?:19|20)\d{2})", re.I)
-_SINCE_RE = re.compile(r"(?:since|established|est\.?|founded|serving\s+\w+\s+since)\s*(?:in\s*)?((?:19|20)\d{2})", re.I)
+_SINCE_RE = re.compile(
+    r"(?:since|established|est\.?|founded|incorporated)"
+    r"\s*:?\s*(?:in\s+)?((?:19|20)\d{2})",
+    re.I,
+)
+# Anniversary-style signals: "35th anniversary" or "celebrating 35 years" → infer founding year
+_ANNIVERSARY_RE = re.compile(r"\b(\d{1,3})(?:st|nd|rd|th)?\s+(?:year\s+)?anniversary\b", re.I)
+_CELEBRATING_RE = re.compile(r"\bcelebrating\s+(?:over\s+)?(\d{1,3})\s+years?\b", re.I)
 _GENERATION_RE = re.compile(
     r"\b(?:\d{1,2}(?:st|nd|rd|th)?|one|two|three|four|five|second|third|fourth|fifth)[\s-]*generation",
     re.I,
@@ -669,10 +676,13 @@ def _max_duration_years(text: str) -> int:
 
 
 def _founding_years(content: str, established: str) -> list[int]:
+    current_year = datetime.now().year
     text = f"{established} {content}"
     years: set[int] = set()
     for m in _COPYRIGHT_RE.finditer(text):
-        years.add(int(m.group(1)))
+        y = int(m.group(1))
+        if y < current_year:  # current-year copyright is a date-of-update marker, not a founding signal
+            years.add(y)
     for m in _SINCE_RE.finditer(text):
         years.add(int(m.group(1)))
     # bare years inside the explicit established field are trustworthy
@@ -681,37 +691,84 @@ def _founding_years(content: str, established: str) -> list[int]:
     return sorted(years)
 
 
-def _assess_longevity(established: str, content: str) -> tuple[str, bool]:
-    """Return (human-readable longevity label, is_old flag).
+def _assess_longevity(established: str, content: str) -> tuple[str, bool, list[str]]:
+    """Return (human-readable longevity label, is_old flag, signal list).
 
     is_old=True means the business shows signs of being long-running (and thus a
     weaker "new business" lead even though the domain is freshly registered).
+    The signal list records what evidence was found (and what was skipped) for log tracing.
     """
     current_year = datetime.now().year
-    years = [y for y in _founding_years(content, established) if 1900 <= y <= current_year]
+    text = f"{established} {content}"
+    signals: list[str] = []
+    seen: set[str] = set()
+    years: set[int] = set()
+
+    def _sig(s: str) -> None:
+        if s not in seen:
+            seen.add(s)
+            signals.append(s)
+
+    for m in _COPYRIGHT_RE.finditer(text):
+        y = int(m.group(1))
+        if y < current_year:
+            years.add(y)
+            _sig(f"copyright:{y}")
+        else:
+            _sig(f"copyright:{y}(skipped-current-year)")
+    for m in _SINCE_RE.finditer(text):
+        y = int(m.group(1))
+        years.add(y)
+        _sig(f"since-phrase:{y}")
+    for m in _YEAR_RE.finditer(established):
+        y = int(m.group(1))
+        years.add(y)
+        _sig(f"established-field:{y}")
+    for m in _ANNIVERSARY_RE.finditer(text):
+        yrs = int(m.group(1))
+        if yrs >= 3:
+            est_yr = current_year - yrs
+            if 1900 <= est_yr <= current_year:
+                years.add(est_yr)
+                _sig(f"anniversary:{yrs}y→{est_yr}")
+    for m in _CELEBRATING_RE.finditer(text):
+        yrs = int(m.group(1))
+        if yrs >= 3:
+            est_yr = current_year - yrs
+            if 1900 <= est_yr <= current_year:
+                years.add(est_yr)
+                _sig(f"celebrating:{yrs}y→{est_yr}")
+
+    valid_years = sorted(y for y in years if 1900 <= y <= current_year)
     est_low = (established or "").lower()
     scan = f"{est_low} {content[:5000].lower()}"
 
     # Multi-generation / decades language is a strong "old business" tell.
     if _GENERATION_RE.search(scan):
-        return ("Established — multi-generation business", True)
+        _sig("keyword:multi-generation")
+        return ("Established — multi-generation business", True, signals)
     if any(word in scan for word in ("decade", "long-running", "longstanding", "long-established")):
-        return ("Established — decades in business", True)
+        kw = next(w for w in ("decade", "long-running", "longstanding", "long-established") if w in scan)
+        _sig(f"keyword:{kw}")
+        return ("Established — decades in business", True, signals)
 
-    if years:
-        founded = min(years)
+    if valid_years:
+        founded = min(valid_years)
         age = current_year - founded
         if age >= 3:
-            return (f"Established ~{age}y (since {founded})", True)
+            return (f"Established ~{age}y (since {founded})", True, signals)
         if age >= 1:
-            return (f"Recent (since {founded})", False)
-        return (f"New (founded {founded})", False)
+            return (f"Recent (since {founded})", False, signals)
+        return (f"New (founded {founded})", False, signals)
 
     duration = _max_duration_years(scan)
     if duration >= 3:
-        return (f"Established — {duration}+ years in business", True)
+        _sig(f"duration:{duration}y")
+        return (f"Established — {duration}+ years in business", True, signals)
 
-    return ("No age signal found", False)
+    if not signals:
+        _sig("no-signal")
+    return ("No age signal found", False, signals)
 
 
 def _detect_social(content: str, html: str) -> str:
@@ -744,8 +801,9 @@ def _is_free_email(email: str) -> bool:
 def _build_audit(info: dict, content: str, html: str) -> dict:
     """Layer deterministic signals on top of the LLM extraction and roll up audit_notes."""
     established = info.get("established", "")
-    longevity, is_old = _assess_longevity(established, content)
+    longevity, is_old, longevity_signals = _assess_longevity(established, content)
     info["longevity"] = longevity
+    info["_longevity_signals"] = longevity_signals  # ephemeral — logged, not written to DB
 
     if not info.get("entity_type"):
         entity = _detect_entity(content)
@@ -880,6 +938,7 @@ def run_enrichment(limit: int = 0, reaudit: str | None = None) -> int:
         futures = {executor.submit(_enrich_row, row): row for row in rows}
         for future in as_completed(futures):
             domain, info = future.result()
+            longevity_signals = info.pop("_longevity_signals", [])
             domain_store.update_domain(domain, **info)
             enriched += 1
             disqualified = info.get("audit_verdict") == "disqualified"
@@ -890,7 +949,8 @@ def run_enrichment(limit: int = 0, reaudit: str | None = None) -> int:
             if info.get("owner_name"):
                 bits.append(f"owner: {info['owner_name']}")
             if info.get("longevity"):
-                bits.append(info["longevity"])
+                sig_str = f" [{', '.join(longevity_signals)}]" if longevity_signals else ""
+                bits.append(f"{info['longevity']}{sig_str}")
             if info.get("audit_notes"):
                 bits.append(info["audit_notes"])
             tag = (" | " + " | ".join(bits)) if bits else ""
