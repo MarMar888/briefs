@@ -36,6 +36,7 @@ import requests
 import domain_store
 from classifier import validate_site, classify_domain
 from fetcher import Filing
+from version import get_version
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; lead-monitor/1.0)"}
 USA_TLDS = {".com", ".net", ".us"}
@@ -647,6 +648,7 @@ def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter:
             domain_store.batch_update_domains([
                 {"domain": r["domain"], "status": "not_outdoor",
                  "classification_reason": "no keyword match in domain name",
+                 "classified_version": get_version(),
                  "classified_at": now, "last_checked_at": now}
                 for r in rejected
             ])
@@ -826,6 +828,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
                                         "redirected_to": redirected_to,
                                         "redirect_domain": redirect_domain,
                                         "phone": phone, "email": email,
+                                        "classified_version": get_version(),
                                         "next_check_at": next_rescrape,
                                         "classified_at": now, "last_checked_at": now,
                                         "attempt_count": count})
@@ -858,6 +861,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
                                             "redirect_domain": v.get("redirect_domain", ""),
                                             "phone": v.get("phone", ""),
                                             "email": v.get("email", ""),
+                                            "classified_version": get_version(),
                                             "next_check_at": next_rescrape,
                                             "classified_at": now, "last_checked_at": now,
                                             "attempt_count": count})

@@ -35,6 +35,8 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from version import get_version
+
 load_dotenv()
 
 _ENRICH_WORKERS = int(os.environ.get("ENRICH_WORKERS", "4"))
@@ -754,6 +756,7 @@ def _enrich_row(row: dict) -> tuple[str, dict]:
     info = _extract_info(audit_content) if audit_content.strip() else {}
     info = _build_audit(info, content, html)  # deterministic checks on site content only
     info["enriched_at"] = datetime.utcnow().isoformat()
+    info["enriched_version"] = get_version()
 
     # Label, don't kill: disqualified leads keep status=matched with audit_verdict
     # set. They're suppressed from the default dashboard view and from alerts, never

@@ -149,6 +149,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Se
                       </div>
                       {lead.businessSummary ? <small>{lead.businessSummary}</small> : null}
                       {lead.socialLinks ? <small>{lead.socialLinks}</small> : null}
+                      {lead.enrichedVersion ? <small className="muted">audited on v{lead.enrichedVersion}</small> : null}
                     </div>
                   ) : (
                     <small className="muted">not audited</small>

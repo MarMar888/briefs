@@ -4,6 +4,8 @@ import time
 from contextlib import closing
 from datetime import datetime, timedelta
 
+from version import get_version
+
 DB_PATH = (
     os.environ.get("DOMAIN_DB_PATH")
     or os.environ.get("TURSO_DB_URL")
@@ -60,7 +62,11 @@ CREATE TABLE IF NOT EXISTS domains (
     side_project          INTEGER NOT NULL DEFAULT 0,
     longevity             TEXT,
     audit_notes           TEXT,
-    audit_verdict         TEXT
+    audit_verdict         TEXT,
+    -- pipeline provenance: which pipeline version touched the domain at each stage
+    found_version         TEXT,
+    classified_version    TEXT,
+    enriched_version      TEXT
 )
 """
 
@@ -96,6 +102,9 @@ SELECT
     longevity,
     audit_notes,
     audit_verdict,
+    found_version,
+    classified_version,
+    enriched_version,
     classification_reason  AS reason,
     classified_at,
     source_date,
@@ -112,6 +121,7 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     finished_at         TEXT,
     source              TEXT,
     status              TEXT NOT NULL DEFAULT 'running',
+    pipeline_version    TEXT,
     -- ingestion funnel
     downloaded          INTEGER,
     tld_filtered        INTEGER,
@@ -153,6 +163,7 @@ _RUNS_MIGRATIONS = [
     "ALTER TABLE pipeline_runs ADD COLUMN random_matched INTEGER",
     "ALTER TABLE pipeline_runs ADD COLUMN keyword_processed INTEGER",
     "ALTER TABLE pipeline_runs ADD COLUMN keyword_matched INTEGER",
+    "ALTER TABLE pipeline_runs ADD COLUMN pipeline_version TEXT",
 ]
 
 _MIGRATIONS = [
@@ -186,6 +197,9 @@ _MIGRATIONS = [
     "ALTER TABLE domains ADD COLUMN longevity TEXT",
     "ALTER TABLE domains ADD COLUMN audit_notes TEXT",
     "ALTER TABLE domains ADD COLUMN audit_verdict TEXT",
+    "ALTER TABLE domains ADD COLUMN found_version TEXT",
+    "ALTER TABLE domains ADD COLUMN classified_version TEXT",
+    "ALTER TABLE domains ADD COLUMN enriched_version TEXT",
 ]
 
 
@@ -237,14 +251,15 @@ def upsert_new(domains: list[str], source_date: str, random_sample: bool = False
     now = now_dt.isoformat()
     expires_at = (now_dt + timedelta(days=TRACKING_DAYS)).isoformat()
     rs_flag = 1 if random_sample else 0
+    version = get_version()
     inserted = 0
     with closing(_db()) as conn:
         for domain in domains:
             cur = conn.execute(
                 "INSERT OR IGNORE INTO domains "
-                "(domain, source_date, first_seen_at, last_seen_at, expires_at, status, random_sample) "
-                "VALUES (?, ?, ?, ?, ?, 'new', ?)",
-                (domain, source_date, now, now, expires_at, rs_flag),
+                "(domain, source_date, first_seen_at, last_seen_at, expires_at, status, random_sample, found_version) "
+                "VALUES (?, ?, ?, ?, ?, 'new', ?, ?)",
+                (domain, source_date, now, now, expires_at, rs_flag, version),
             )
             inserted += cur.rowcount
         conn.commit()
@@ -433,8 +448,9 @@ def start_run(source: str) -> int:
     now = datetime.utcnow().isoformat()
     with closing(_db()) as conn:
         cur = conn.execute(
-            "INSERT INTO pipeline_runs (started_at, source, status) VALUES (?, ?, 'running')",
-            (now, source),
+            "INSERT INTO pipeline_runs (started_at, source, status, pipeline_version) "
+            "VALUES (?, ?, 'running', ?)",
+            (now, source, get_version()),
         )
         conn.commit()
         return cur.lastrowid

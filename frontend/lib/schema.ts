@@ -24,6 +24,7 @@ export const pipelineRuns = sqliteTable("pipeline_runs", {
   keywordMatched: integer("keyword_matched"),
   expired: integer("expired"),
   error: text("error"),
+  pipelineVersion: text("pipeline_version"),
 });
 
 export type PipelineRun = typeof pipelineRuns.$inferSelect;
@@ -72,7 +73,10 @@ export const domains = sqliteTable("domains", {
   sideProject: integer("side_project", { mode: "boolean" }).notNull().default(false),
   longevity: text("longevity"),
   auditNotes: text("audit_notes"),
-  auditVerdict: text("audit_verdict")
+  auditVerdict: text("audit_verdict"),
+  foundVersion: text("found_version"),
+  classifiedVersion: text("classified_version"),
+  enrichedVersion: text("enriched_version")
 });
 
 export type Domain = typeof domains.$inferSelect;
