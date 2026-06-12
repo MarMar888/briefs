@@ -185,6 +185,23 @@ def _sitemap_audit_urls(root: str, host: str) -> list[str]:
     return matches
 
 
+async def _crawl4ai_links_async(url: str) -> list[dict]:
+    from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+    config = CrawlerRunConfig(excluded_tags=[], remove_overlay_elements=False)
+    async with AsyncWebCrawler() as crawler:
+        result = await crawler.arun(url=url, config=config)
+    if not result.success:
+        return []
+    return result.links.get("internal", [])
+
+
+def _crawl4ai_discover_links(url: str) -> list[dict]:
+    try:
+        return _get_crawl4ai_loop().run_until_complete(_crawl4ai_links_async(url))
+    except Exception:
+        return []
+
+
 async def _crawl4ai_fetch_async(url: str, max_chars: int) -> str:
     from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
     from crawl4ai.content_filter_strategy import PruningContentFilter
@@ -279,31 +296,38 @@ def _discover_audit_urls(base_url: str) -> tuple[list[str], str]:
 
     discovered: list[str] = []
     seen: set[str] = set()
+
+    def _add_link(href: str, link_text: str = "") -> None:
+        if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
+            return
+        full = urljoin(root + "/", href)
+        p = urlparse(full)
+        if p.netloc.lower().replace("www.", "") != host.replace("www.", ""):
+            return
+        haystack = f"{p.path.lower()} {link_text.lower()}"
+        if not any(hint in haystack for hint in _PAGE_HINTS):
+            return
+        norm = full.split("#")[0].rstrip("/")
+        if norm and norm not in seen and norm != base_url.rstrip("/"):
+            seen.add(norm)
+            discovered.append(norm)
+
     if html:
         soup = BeautifulSoup(html, "html.parser")
         for a in soup.find_all("a", href=True):
-            href = a["href"].strip()
-            if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
-                continue
-            full = urljoin(root + "/", href)
-            p = urlparse(full)
-            if p.netloc.lower().replace("www.", "") != host.replace("www.", ""):
-                continue  # off-site link
-            text = (a.get_text(" ", strip=True) or "").lower()
-            haystack = f"{p.path.lower()} {text}"
-            if not any(hint in haystack for hint in _PAGE_HINTS):
-                continue
-            norm = full.split("#")[0].rstrip("/")
-            if norm and norm not in seen and norm != base_url.rstrip("/"):
-                seen.add(norm)
-                discovered.append(norm)
+            _add_link(a["href"].strip(), a.get_text(" ", strip=True))
 
-    # Augment on-page links with sitemap.xml-discovered pages (catches sites
-    # whose nav is JS-rendered or that bury about/history pages).
+    # Augment with sitemap.xml-discovered pages (catches sites that bury pages).
     for url in _sitemap_audit_urls(root, host):
         if url not in seen and url != base_url.rstrip("/"):
             seen.add(url)
             discovered.append(url)
+
+    # JS-rendered sites return a script shell to requests — no nav links visible.
+    # Fall back to Crawl4AI's rendered links before guessing fallback paths.
+    if not discovered:
+        for link in _crawl4ai_discover_links(base_url):
+            _add_link(link.get("href", ""), link.get("text", ""))
 
     if not discovered:
         discovered = [root + path for path in _FALLBACK_PATHS]
