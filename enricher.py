@@ -43,6 +43,9 @@ _ENRICH_WORKERS = int(os.environ.get("ENRICH_WORKERS", "4"))
 _LLM_RETRIES = 4
 _MAX_AUDIT_PAGES = int(os.environ.get("ENRICH_MAX_PAGES", "5"))
 _MAX_CONTENT_CHARS = int(os.environ.get("ENRICH_MAX_CHARS", "9000"))
+# Per-page navigation timeout for the headless browser (ms). Default 20s — a
+# hung page shouldn't block a worker for the browser default of 60s.
+_PAGE_TIMEOUT_MS = int(os.environ.get("ENRICH_PAGE_TIMEOUT_MS", "20000"))
 # Off-site search: looks the business up on the open web (directories, social,
 # reviews, news) for age/size signals the site itself may not state. Works
 # keyless via DuckDuckGo by default; set BRAVE_SEARCH_API_KEY or SERPAPI_API_KEY
@@ -50,20 +53,36 @@ _MAX_CONTENT_CHARS = int(os.environ.get("ENRICH_MAX_CHARS", "9000"))
 _EXTERNAL_SEARCH = os.environ.get("ENRICH_EXTERNAL_SEARCH", "1") != "0"
 _SEARCH_RESULTS = int(os.environ.get("ENRICH_SEARCH_RESULTS", "6"))
 _DDG_RETRIES = int(os.environ.get("ENRICH_DDG_RETRIES", "2"))
+# Circuit breaker: after this many consecutive throttles, give up on off-site
+# search for the rest of the run (datacenter IPs like CI runners get hard-blocked
+# by DuckDuckGo — no point burning retry-backoff time on every remaining lead).
+_THROTTLE_TRIP = int(os.environ.get("ENRICH_THROTTLE_TRIP", "3"))
 
-# Run-level throttle telemetry so we can monitor how often off-site search gets
-# blocked (DuckDuckGo throttles datacenter IPs). Reset at the start of each run.
+# Run-level throttle telemetry + circuit-breaker state. Reset at start of each run.
 _throttle_lock = threading.Lock()
 _throttle_count = 0
 _search_attempts = 0
+_consecutive_throttles = 0
+_search_disabled = False
 
 
 def _note_search(throttled: bool) -> None:
-    global _throttle_count, _search_attempts
+    """Record a search attempt and drive the circuit breaker."""
+    global _throttle_count, _search_attempts, _consecutive_throttles, _search_disabled
     with _throttle_lock:
         _search_attempts += 1
         if throttled:
             _throttle_count += 1
+            _consecutive_throttles += 1
+            if _consecutive_throttles >= _THROTTLE_TRIP and not _search_disabled:
+                _search_disabled = True
+                print(
+                    f"[enricher] Off-site search disabled for the rest of this run after "
+                    f"{_consecutive_throttles} consecutive throttles (datacenter IP blocked)",
+                    flush=True,
+                )
+        else:
+            _consecutive_throttles = 0
 
 ENRICH_PROMPT = """You are auditing a company's website to vet it as a commercial insurance lead.
 The broker wants NEW or EARLY-STAGE outdoor businesses and wants to AVOID two things:
@@ -189,7 +208,10 @@ def _sitemap_audit_urls(root: str, host: str) -> list[str]:
 
 async def _crawl4ai_links_async(url: str) -> list[dict]:
     from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
-    config = CrawlerRunConfig(excluded_tags=[], remove_overlay_elements=False)
+    config = CrawlerRunConfig(
+        excluded_tags=[], remove_overlay_elements=False,
+        page_timeout=_PAGE_TIMEOUT_MS, verbose=False,
+    )
     async with AsyncWebCrawler() as crawler:
         result = await crawler.arun(url=url, config=config)
     if not result.success:
@@ -212,6 +234,8 @@ async def _crawl4ai_fetch_async(url: str, max_chars: int) -> str:
     config = CrawlerRunConfig(
         excluded_tags=["nav", "footer", "aside"],
         remove_overlay_elements=True,
+        page_timeout=_PAGE_TIMEOUT_MS,
+        verbose=False,
         markdown_generator=DefaultMarkdownGenerator(
             content_filter=PruningContentFilter(threshold=0.48, threshold_type="fixed"),
             options={"ignore_links": True},
@@ -354,7 +378,21 @@ def _fetch_pages(base_url: str) -> tuple[str, str]:
 # --- off-site search -------------------------------------------------------
 
 _TITLE_SEP_RE = re.compile(r"\s*[|\-–—:·]\s*")
-_TITLE_NOISE = {"home", "homepage", "welcome", "official site", "official website"}
+_TITLE_NOISE = {
+    "home", "homepage", "welcome", "official site", "official website",
+    "website", "my website", "untitled", "untitled document", "index",
+    "main page", "page title", "coming soon", "under construction",
+}
+# Builder/template default titles, e.g. "My Site", "My Site 2", "New Page", "Site 1".
+_PLACEHOLDER_TITLE_RE = re.compile(r"^(?:my )?site\s*\d*$|^new (?:page|site)\b|^page\s*\d+$", re.I)
+# A real location is short ("City, ST"); reject LLM prose that leaked into the field.
+_LOCATION_PROSE_RE = re.compile(
+    r"\b(?:doesn't|isn't|however|match|mentioned|appears|implied|unknown|no\b|not\b)", re.I
+)
+
+
+def _is_placeholder_title(seg: str) -> bool:
+    return seg.lower() in _TITLE_NOISE or bool(_PLACEHOLDER_TITLE_RE.match(seg))
 
 
 def _business_name(html: str, domain: str) -> str:
@@ -368,12 +406,26 @@ def _business_name(html: str, domain: str) -> str:
             title = ""
     if title:
         # Titles usually lead with the brand ("Brand | tagline"); take the first
-        # meaningful segment after dropping generic words like "Home".
+        # meaningful segment, dropping generic/placeholder builder titles.
         segments = [s.strip() for s in _TITLE_SEP_RE.split(title) if s.strip()]
-        segments = [s for s in segments if s.lower() not in _TITLE_NOISE]
+        segments = [s for s in segments if not _is_placeholder_title(s)]
         if segments:
             return segments[0]
+    # No usable title (or a "My Site 2" template default) — derive from the domain.
     return domain.rsplit(".", 1)[0].replace("-", " ")
+
+
+def _clean_location(location: str) -> str:
+    """Keep only a short, real-looking location for the search query.
+
+    The stored `location` sometimes carries LLM commentary (e.g. "Brunswick,
+    Melbourne doesn't match with the state..."). Anything long or prose-like is
+    dropped rather than poisoning the query.
+    """
+    loc = (location or "").split(".")[0].strip()
+    if not loc or len(loc) > 40 or _LOCATION_PROSE_RE.search(loc):
+        return ""
+    return loc
 
 
 def _search_brave(query: str) -> list[dict]:
@@ -452,6 +504,10 @@ def _search_duckduckgo(query: str) -> list[dict]:
     backoff + jitter, and on persistent throttling logs a clear, greppable line
     and returns [] — the lead is then audited on its own site content alone.
     """
+    # Circuit breaker tripped earlier this run — don't even try.
+    if _search_disabled:
+        return []
+
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -474,10 +530,13 @@ def _search_duckduckgo(query: str) -> list[dict]:
             break
 
         body_head = resp.text[:3000].lower()
-        is_throttle = resp.status_code in (202, 429) or any(m in body_head for m in _DDG_BLOCK_MARKERS)
-        if is_throttle:
+        # 202 / anomaly page = a hard bot-block (persistent on datacenter IPs) — no
+        # point retrying. 429 = rate limit, which a short backoff may clear.
+        is_block = resp.status_code == 202 or any(m in body_head for m in _DDG_BLOCK_MARKERS)
+        is_ratelimit = resp.status_code == 429
+        if is_block or is_ratelimit:
             throttled = True
-            if attempt <= _DDG_RETRIES:
+            if is_ratelimit and attempt <= _DDG_RETRIES:
                 time.sleep(2 ** attempt + random.uniform(0, 1))
                 continue
             print(f"[enricher] DuckDuckGo THROTTLED for '{query}' (status {resp.status_code}) — skipping off-site signals", flush=True)
@@ -504,11 +563,12 @@ def _external_signals(domain: str, html: str, location: str) -> str:
     hits). The block is appended to the audit content so both the LLM and the
     deterministic longevity/size checks can use it.
     """
-    if not _EXTERNAL_SEARCH:
+    if not _EXTERNAL_SEARCH or _search_disabled:
         return ""
 
     name = _business_name(html, domain)
-    query = f"{name} {location}".strip() if location else name
+    loc = _clean_location(location)
+    query = f"{name} {loc}".strip() if loc else name
     results = _search_brave(query) or _search_serpapi(query) or _search_duckduckgo(query)
     if not results:
         return ""
@@ -788,10 +848,12 @@ def run_enrichment(limit: int = 0, reaudit: str | None = None) -> int:
         print(f"[enricher] Nothing to do ({mode})", flush=True)
         return 0
 
-    global _throttle_count, _search_attempts
+    global _throttle_count, _search_attempts, _consecutive_throttles, _search_disabled
     with _throttle_lock:
         _throttle_count = 0
         _search_attempts = 0
+        _consecutive_throttles = 0
+        _search_disabled = False
 
     print(f"[enricher] {mode}: {len(rows)} domains ({_ENRICH_WORKERS} workers)", flush=True)
     enriched = 0
