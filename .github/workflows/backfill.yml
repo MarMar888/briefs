@@ -1,4 +1,4 @@
-name: Classify Pending Sites
+name: Backfill Queue
 
 on:
   schedule:
@@ -15,6 +15,11 @@ on:
         required: false
         default: "0"
 
+# Shared with Live Ingest Loop + Lead Audit so the three never run at once.
+concurrency:
+  group: lead-pipeline
+  cancel-in-progress: false
+
 jobs:
   backfill:
     runs-on: ubuntu-latest
@@ -29,6 +34,9 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Install Playwright browsers
+        run: playwright install chromium --with-deps
 
       - name: Run geo + site classification batch
         run: |

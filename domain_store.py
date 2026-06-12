@@ -10,7 +10,7 @@ DB_PATH = (
     or os.path.join(os.path.dirname(__file__), "domain_leads.sqlite3")
 )
 
-TERMINAL_STATUSES = {"matched", "not_outdoor", "non_us", "expired", "audit_rejected"}
+TERMINAL_STATUSES = {"matched", "not_outdoor", "non_us", "expired"}
 TRACKING_DAYS = int(os.environ.get("DOMAIN_TRACKING_DAYS", "180"))
 
 _SCHEMA = """
@@ -218,6 +218,16 @@ def init_db() -> None:
                 pass  # column/object already exists
         conn.execute("DROP VIEW IF EXISTS matched_domains")
         conn.execute(_MATCHED_VIEW)
+        # Label, don't kill: recover any leads stranded in the retired terminal
+        # 'audit_rejected' state back into matched with a disqualified verdict, so
+        # the audit filter suppresses them instead of deleting them. Idempotent.
+        try:
+            conn.execute(
+                "UPDATE domains SET status = 'matched', audit_verdict = 'disqualified' "
+                "WHERE status = 'audit_rejected'"
+            )
+        except Exception:
+            pass
         conn.commit()
 
 
@@ -319,6 +329,7 @@ def get_unalerted_matches() -> list[dict]:
         cursor = conn.execute(
             "SELECT * FROM matched_domains "
             "WHERE email_sent_at IS NULL AND enriched_at IS NOT NULL "
+            "AND audit_verdict = 'qualified' "
             "ORDER BY classified_at DESC"
         )
         return _rows_to_dicts(cursor)

@@ -22,11 +22,85 @@ The classifier tries to reject old/established businesses, generic template site
 3. **Queue in SQLite or Turso/LibSQL** at `domain_leads.sqlite3` unless `DOMAIN_DB_PATH` or `TURSO_DB_URL` is set.
 4. **Resolve and geolocate hosting IPs** with DNS + `ip-api.com`; non-US-hosted domains are marked terminal `non_us`.
 5. **Fetch and validate websites**; parked, coming-soon, sparse, and unreachable sites stay `site_pending` for later retry.
-6. **Classify with OpenRouter** using a 0-100 lead score and structured fields.
-7. **Alert via Resend** for newly matched domains that have not already been emailed.
-8. **Review in the Vercel frontend** backed by the same Turso database.
+6. **Classify with OpenRouter** using a 0-100 lead score and structured fields. Score ≥ 70 → `matched`.
+7. **Deep-search audit** (second-stage filter) on matched leads: multi-page crawl + sitemap + off-site search, then longevity/size/side-project signals. Established businesses and side projects are flagged `audit_verdict = disqualified` (suppressed from the default view and alerts — never deleted; see Design Principles).
+8. **Alert via Resend** for newly matched, audit-qualified domains that have not already been emailed.
+9. **Review in the Vercel frontend** backed by the same Turso database.
 
 Important: “US-hosted” means the resolved IP geolocated to the US. It does not prove the business is in the US. The classifier also checks page content for US location signals and demotes obvious/ambiguous non-US lodging or tour leads.
+
+## Design Principles
+
+These are load-bearing. Re-read them before changing any filtering or audit logic.
+
+**Label, don't kill — automated filters are never one-way doors.** A heuristic's job
+is to *triage*, not to decide. When the audit (or any automated stage) rejects a lead,
+it must demote it so it drops out of the default dashboard view and out of alerts —
+**not** delete it, and **not** move it to a state it can never return from. Every
+automated rejection must be:
+
+- **Reversible** — a human (or a later rescrape) can bring it back.
+- **Visible** — it stays queryable/filterable in the dashboard, with its verdict shown.
+- **Attributed** — you can see *why* it was demoted (the audit reason).
+
+Concretely:
+
+- Heuristic disqualifications keep the lead in `status = matched` with
+  `audit_verdict = 'disqualified'` plus a reason. They are filtered out of the default
+  view and alerts — they are **not** deleted and **not** moved to a terminal status.
+- Only a human verdict, or a hard unambiguous fact (e.g. non-US hosting IP), may set a
+  truly terminal state.
+- **External/off-site data may inform a flag but must never, on its own, drive a
+  rejection.** A stray year in a directory snippet ("…since 2004") must not auto-kill a
+  brand-new lead. Deterministic longevity/age checks run on the business's own site
+  content; off-site search is context for the LLM and the dashboard, not a kill switch.
+
+The reason: the cost of a false "kill" (a real new lead silently gone) is far higher than
+the cost of a false "keep" (one extra row a human skips past). Keep the funnel ruthless in
+what it *surfaces*, never in what it *destroys*.
+
+## Architecture
+
+The pipeline is a **state machine over a durable queue**, not a script: every domain is a
+row with a `status`, and each stage advances rows that are due in a given state. That makes
+every stage resumable, retryable, idempotent, and observable (counts at each hop = the
+sourcing funnel).
+
+Three GitHub Actions workflows drive it, sharing one concurrency group so they never overlap
+(they touch the same matched backlog — overlap would double LLM spend and worsen search
+throttling):
+
+```
+ LIVE INGEST LOOP (daily)     BACKFILL QUEUE (every 4h)      LEAD AUDIT (daily + inline)
+ ───────────────────────     ─────────────────────────      ──────────────────────────
+ fetch NRDs                  drain geo_pending               consume: matched & not-yet-audited
+ TLD + keyword filter        drain site_pending              crawl + sitemap + off-site search
+ seed queue (status=new)     classify → matched              LLM extract + deterministic signals
+        │                          │                         write: audit fields + verdict
+        │                          │                         qualified   → eligible to alert
+        │                          │                         disqualified → suppressed, NOT killed
+        ▼                          ▼                                   │
+        └───────────► domains queue (explicit states) ◄───────────────┘
+                              │                                        │
+                              │                                        ▼
+                              └────────► DELIVER (Resend): alert where
+                                         status=matched AND audit_verdict='qualified'
+                                         AND email_sent_at IS NULL      (idempotent)
+        ▲
+        └──── ONE concurrency group `lead-pipeline`: the three queue, never run at once
+
+ Funnel ordering = cheapest filter first: keyword (free) → geo (cheap) → classify (LLM)
+                   → deep audit (most expensive). Spend the LLM budget on what survives.
+
+ States: new → geo_pending → site_pending → matched → (audited)
+         terminal: not_outdoor · non_us · expired        (only hard facts/human get terminal)
+         matched + audit_verdict='disqualified' = suppressed, reversible, still in the DB
+```
+
+MVP notes: the audit currently runs **inline** in `run.py` after classification (bounded by
+`INLINE_AUDIT_LIMIT`, default 200) so alerts only fire on audit-qualified leads, with the
+standalone **Lead Audit** job draining any remainder. The longer-term shape is the same audit
+as a fully decoupled stage that delivery just reads from — already 80% there.
 
 ## Setup
 
@@ -162,6 +236,12 @@ not_outdoor   Classified as not a lead
 non_us        Hosting IP geolocated outside the US
 expired       No longer active after the tracking window
 ```
+
+Matched leads also carry an `audit_verdict` once the deep-search audit has run:
+`qualified` (eligible for alerts + default view) or `disqualified` (established business
+or side project — suppressed from the default view and alerts, but kept in the DB and
+visible via the dashboard's "Suppressed" audit filter). The audit never deletes a lead or
+moves it to a terminal state — see Design Principles.
 
 Useful inspection commands:
 

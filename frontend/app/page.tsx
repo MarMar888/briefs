@@ -23,7 +23,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Se
     maxScore: numberParam(first(params.maxScore)),
     ecomOnly: (first(params.ecomOnly) as LeadFilters["ecomOnly"]) || "all",
     reviewed: (first(params.reviewed) as LeadFilters["reviewed"]) || "approved",
-    audit: (first(params.audit) as LeadFilters["audit"]) || "all"
+    audit: (first(params.audit) as LeadFilters["audit"]) || "active"
   };
 
   const [stats, leads] = await Promise.all([getLeadStats(), getMatchedLeads(filters)]);
@@ -84,10 +84,11 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Se
         <label>
           Audit
           <select name="audit" defaultValue={filters.audit}>
-            <option value="all">All</option>
+            <option value="active">Active (default)</option>
             <option value="qualified">Passed audit</option>
-            <option value="filtered">Filtered out</option>
+            <option value="filtered">Suppressed</option>
             <option value="unaudited">Not audited</option>
+            <option value="all">All (incl. suppressed)</option>
           </select>
         </label>
         <button className="textButton" type="submit">

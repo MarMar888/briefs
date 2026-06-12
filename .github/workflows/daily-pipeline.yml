@@ -1,9 +1,15 @@
-name: Ingest New Domains
+name: Live Ingest Loop
 
 on:
   schedule:
     - cron: "0 11 * * *"
   workflow_dispatch:
+
+# Shared with Backfill Queue + Lead Audit so the three never run at once
+# (they touch the same matched backlog — overlap = double LLM spend + more throttling).
+concurrency:
+  group: lead-pipeline
+  cancel-in-progress: false
 
 jobs:
   pipeline:
@@ -18,6 +24,9 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Install Playwright browsers
+        run: playwright install chromium --with-deps
 
       - name: Run domain pipeline
         run: python run.py --domains-only --domain-source domainsmonitor --keywords --site-limit 200
