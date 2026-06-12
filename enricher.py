@@ -764,13 +764,28 @@ def _enrich_row(row: dict) -> tuple[str, dict]:
     return domain, info
 
 
-def run_enrichment(limit: int = 0) -> int:
+def run_enrichment(limit: int = 0, reaudit: str | None = None) -> int:
+    """Audit matched leads.
+
+    reaudit=None  → only not-yet-audited leads (default daily behavior).
+    reaudit="stale" → re-audit leads not on the current pipeline version (catch-up).
+    reaudit="all"   → re-audit every matched lead.
+    """
     import domain_store
     domain_store.init_db()
 
-    rows = domain_store.get_unenriched_matches(limit=limit)
+    if reaudit == "all":
+        rows = domain_store.get_matches_to_reaudit(limit=limit, stale_only=False)
+        mode = "re-auditing ALL matched"
+    elif reaudit == "stale":
+        rows = domain_store.get_matches_to_reaudit(limit=limit, stale_only=True)
+        mode = f"re-auditing matched not on {get_version().split('+')[0]}"
+    else:
+        rows = domain_store.get_unenriched_matches(limit=limit)
+        mode = "auditing new matched"
+
     if not rows:
-        print("[enricher] No unenriched matches found", flush=True)
+        print(f"[enricher] Nothing to do ({mode})", flush=True)
         return 0
 
     global _throttle_count, _search_attempts
@@ -778,7 +793,7 @@ def run_enrichment(limit: int = 0) -> int:
         _throttle_count = 0
         _search_attempts = 0
 
-    print(f"[enricher] Auditing {len(rows)} matched domains ({_ENRICH_WORKERS} workers)", flush=True)
+    print(f"[enricher] {mode}: {len(rows)} domains ({_ENRICH_WORKERS} workers)", flush=True)
     enriched = 0
     rejected = 0
 
@@ -820,5 +835,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Deep-search audit + enrichment of matched domains")
     parser.add_argument("--limit", type=int, default=0,
                         help="Max domains to enrich per run (0 = no limit)")
+    parser.add_argument("--reaudit", choices=["stale", "all"], default=None,
+                        help="Re-audit already-audited leads: 'stale' = those not on the "
+                             "current pipeline version (catch-up), 'all' = every matched lead")
     args = parser.parse_args()
-    run_enrichment(limit=args.limit)
+    run_enrichment(limit=args.limit, reaudit=args.reaudit)

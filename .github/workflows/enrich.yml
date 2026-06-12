@@ -10,6 +10,10 @@ on:
         description: "Max domains to enrich this run (0 = no limit)"
         required: false
         default: "0"
+      reaudit:
+        description: "Re-audit already-audited leads: none | stale (not on current version) | all"
+        required: false
+        default: "none"
 
 # Shared with Live Ingest Loop + Backfill Queue so the three never run at once.
 concurrency:
@@ -37,8 +41,11 @@ jobs:
       - name: Enrich matched domains
         run: |
           LIMIT="${{ github.event.inputs.limit || '0' }}"
-          echo "[enrich] Running enrichment, limit=$LIMIT"
-          python enricher.py --limit "$LIMIT"
+          REAUDIT="${{ github.event.inputs.reaudit || 'none' }}"
+          FLAG=""
+          [ "$REAUDIT" != "none" ] && FLAG="--reaudit $REAUDIT"
+          echo "[enrich] Running enrichment, limit=$LIMIT, reaudit=$REAUDIT"
+          python enricher.py --limit "$LIMIT" $FLAG
         env:
           DOMAIN_DB_PATH: ${{ secrets.TURSO_DB_URL }}
           TURSO_DB_URL: ${{ secrets.TURSO_DB_URL }}

@@ -332,6 +332,29 @@ def get_unenriched_matches(limit: int = 0) -> list[dict]:
         return _rows_to_dicts(cursor)
 
 
+def get_matches_to_reaudit(limit: int = 0, stale_only: bool = True) -> list[dict]:
+    """Return matched domains to re-run through the deep-search audit.
+
+    stale_only=True (default) returns only leads whose enriched_version is not the
+    current semver — i.e. those not yet caught up to the running pipeline version
+    (including never-audited NULLs). This makes a re-audit idempotent: re-running
+    skips leads already on the current version.
+    stale_only=False returns every matched lead.
+    """
+    with closing(_db()) as conn:
+        sql = "SELECT * FROM domains WHERE status = 'matched'"
+        params: tuple = ()
+        if stale_only:
+            semver = get_version().split("+")[0]
+            sql += " AND (enriched_version IS NULL OR enriched_version NOT LIKE ?)"
+            params = (f"{semver}%",)
+        sql += " ORDER BY score DESC"
+        if limit > 0:
+            sql += f" LIMIT {limit}"
+        cursor = conn.execute(sql, params)
+        return _rows_to_dicts(cursor)
+
+
 def get_unalerted_matches() -> list[dict]:
     """Return matched domains that are ready to alert.
 
