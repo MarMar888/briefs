@@ -4,6 +4,7 @@ import time
 from contextlib import closing
 from datetime import datetime, timedelta
 
+from timeutil import utcnow
 from version import get_version
 
 DB_PATH = (
@@ -247,7 +248,7 @@ def init_db() -> None:
 
 def upsert_new(domains: list[str], source_date: str, random_sample: bool = False) -> int:
     """Insert domains that don't exist yet. Returns count inserted."""
-    now_dt = datetime.utcnow()
+    now_dt = utcnow()
     now = now_dt.isoformat()
     expires_at = (now_dt + timedelta(days=TRACKING_DAYS)).isoformat()
     rs_flag = 1 if random_sample else 0
@@ -278,7 +279,7 @@ def _rows_to_dicts(cursor) -> list[dict]:
 
 def get_due(statuses: list[str]) -> list[dict]:
     """Return domains with given statuses that are due for processing."""
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     ph = ",".join("?" * len(statuses))
     with closing(_db()) as conn:
         cursor = conn.execute(
@@ -292,7 +293,7 @@ def get_due(statuses: list[str]) -> list[dict]:
 
 def expire_stale() -> int:
     """Expire non-terminal domains whose 180-day tracking window has elapsed."""
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     ph = ",".join("?" * len(TERMINAL_STATUSES))
     with closing(_db()) as conn:
         cur = conn.execute(
@@ -307,8 +308,8 @@ def expire_stale() -> int:
 def requeue_rescrapes() -> int:
     """Move matched/not_outdoor domains back to site_pending when their rescrape date is due.
     Skips human-reviewed domains to preserve manual verdicts."""
-    now = datetime.utcnow().isoformat()
-    new_expires = (datetime.utcnow() + timedelta(days=TRACKING_DAYS)).isoformat()
+    now = utcnow().isoformat()
+    new_expires = (utcnow() + timedelta(days=TRACKING_DAYS)).isoformat()
     with closing(_db()) as conn:
         cur = conn.execute(
             "UPDATE domains SET status = 'site_pending', email_sent_at = NULL, "
@@ -376,7 +377,7 @@ def get_unalerted_matches() -> list[dict]:
 def mark_alert_sent(domains: list[str]) -> None:
     if not domains:
         return
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     ph = ",".join("?" * len(domains))
     with closing(_db()) as conn:
         conn.execute(
@@ -424,7 +425,7 @@ def _execute_with_retry(fn, retries: int = 3, backoff: float = 1.0):
 def update_domain(domain: str, **fields) -> None:
     if not fields:
         return
-    fields["last_seen_at"] = datetime.utcnow().isoformat()
+    fields["last_seen_at"] = utcnow().isoformat()
     set_clause = ", ".join(f"{k} = ?" for k in fields)
 
     def _run():
@@ -445,7 +446,7 @@ def batch_update_domains(updates: list, chunk_size: int = 100) -> None:
     fields to set.  All updates in a chunk share one connection and one
     commit, cutting Turso round-trips from O(n) to O(n/chunk_size).
     """
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     for i in range(0, len(updates), chunk_size):
         chunk = updates[i : i + chunk_size]
 
@@ -468,7 +469,7 @@ def batch_update_domains(updates: list, chunk_size: int = 100) -> None:
 
 def start_run(source: str) -> int:
     """Record the start of a pipeline run. Returns the new run id."""
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     with closing(_db()) as conn:
         cur = conn.execute(
             "INSERT INTO pipeline_runs (started_at, source, status, pipeline_version) "
@@ -501,7 +502,7 @@ def finish_run(
     keyword_processed: int | None = None,
     keyword_matched: int | None = None,
 ) -> None:
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     status = "error" if error else "done"
     with closing(_db()) as conn:
         conn.execute(
