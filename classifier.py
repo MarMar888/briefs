@@ -182,15 +182,17 @@ async def _crawl4ai_fetch_async(url: str, max_chars: int) -> str:
     return re.sub(r"\s+", " ", text).strip()[:max_chars]
 
 
-_crawl4ai_loop: asyncio.AbstractEventLoop | None = None
+import threading as _threading
+_crawl4ai_local = _threading.local()
 
 
 def _get_crawl4ai_loop() -> asyncio.AbstractEventLoop:
-    global _crawl4ai_loop
-    if _crawl4ai_loop is None or _crawl4ai_loop.is_closed():
-        _crawl4ai_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(_crawl4ai_loop)
-    return _crawl4ai_loop
+    loop = getattr(_crawl4ai_local, "loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _crawl4ai_local.loop = loop
+    return loop
 
 
 def _fetch_via_crawl4ai(url: str, max_chars: int = 3000) -> str:
