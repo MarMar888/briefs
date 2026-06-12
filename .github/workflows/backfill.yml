@@ -35,6 +35,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Install Playwright browsers
+        run: playwright install chromium --with-deps
+
       - name: Run geo + site classification batch
         run: |
           LIMIT="${{ github.event.inputs.site_limit || '1000' }}"

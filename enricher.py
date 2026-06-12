@@ -207,10 +207,21 @@ async def _crawl4ai_fetch_async(url: str, max_chars: int) -> str:
     return re.sub(r"\s+", " ", text).strip()[:max_chars]
 
 
+_crawl4ai_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _get_crawl4ai_loop() -> asyncio.AbstractEventLoop:
+    global _crawl4ai_loop
+    if _crawl4ai_loop is None or _crawl4ai_loop.is_closed():
+        _crawl4ai_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(_crawl4ai_loop)
+    return _crawl4ai_loop
+
+
 def _scrape(url: str, max_chars: int = 3000) -> str:
     """Scrape a URL via Crawl4AI. Switch body to _firecrawl() to restore Firecrawl."""
     try:
-        return asyncio.run(_crawl4ai_fetch_async(url, max_chars))
+        return _get_crawl4ai_loop().run_until_complete(_crawl4ai_fetch_async(url, max_chars))
     except Exception as e:
         print(f"[enricher] Crawl4AI scrape failed for {url}: {e}", flush=True)
         return ""
