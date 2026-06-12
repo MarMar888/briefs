@@ -22,7 +22,8 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Se
     minScore: numberParam(first(params.minScore)),
     maxScore: numberParam(first(params.maxScore)),
     ecomOnly: (first(params.ecomOnly) as LeadFilters["ecomOnly"]) || "all",
-    reviewed: (first(params.reviewed) as LeadFilters["reviewed"]) || "approved"
+    reviewed: (first(params.reviewed) as LeadFilters["reviewed"]) || "approved",
+    audit: (first(params.audit) as LeadFilters["audit"]) || "all"
   };
 
   const [stats, leads] = await Promise.all([getLeadStats(), getMatchedLeads(filters)]);
@@ -80,6 +81,15 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Se
             <option value="starred">Starred</option>
           </select>
         </label>
+        <label>
+          Audit
+          <select name="audit" defaultValue={filters.audit}>
+            <option value="all">All</option>
+            <option value="qualified">Passed audit</option>
+            <option value="filtered">Filtered out</option>
+            <option value="unaudited">Not audited</option>
+          </select>
+        </label>
         <button className="textButton" type="submit">
           Apply
         </button>
@@ -93,6 +103,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Se
               <th>Score</th>
               <th>Location</th>
               <th>Signals</th>
+              <th>Audit</th>
               <th>Contact</th>
               <th>Reason</th>
               <th>Review</th>
@@ -122,9 +133,32 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Se
                   </div>
                 </td>
                 <td>
+                  {lead.enrichedAt ? (
+                    <div className="audit">
+                      <div className="tags">
+                        {lead.sideProject ? <span className="warn">Side project</span> : null}
+                        {lead.longevity && lead.longevity.startsWith("Established") ? (
+                          <span className="warn">{lead.longevity}</span>
+                        ) : lead.longevity && lead.longevity !== "No age signal found" ? (
+                          <span>{lead.longevity}</span>
+                        ) : null}
+                        {lead.businessSize ? <span>{lead.businessSize}</span> : null}
+                        {lead.locationCount ? <span>{lead.locationCount} loc</span> : null}
+                        {lead.entityType ? <span>{lead.entityType}</span> : null}
+                      </div>
+                      {lead.businessSummary ? <small>{lead.businessSummary}</small> : null}
+                      {lead.socialLinks ? <small>{lead.socialLinks}</small> : null}
+                    </div>
+                  ) : (
+                    <small className="muted">not audited</small>
+                  )}
+                </td>
+                <td>
                   <div className="contact">
                     <span>{lead.phone || "-"}</span>
                     <span>{lead.email || ""}</span>
+                    {lead.ownerName ? <span>{lead.ownerName}</span> : null}
+                    {lead.fullAddress ? <span>{lead.fullAddress}</span> : null}
                   </div>
                 </td>
                 <td className="reason">{lead.classificationReason}</td>

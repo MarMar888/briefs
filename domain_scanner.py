@@ -54,6 +54,8 @@ DOMAIN_RE = re.compile(r"^(?:https?://)?(?:www\.)?([a-z0-9][a-z0-9-]*(?:\.[a-z0-
 
 # Domain name keywords for pre-filtering NRDs before geo/scrape.
 # Used as a set for O(1) token lookup in _matches_keywords.
+# NOTE: This set is the source of truth for the scanner. The website mirrors it for
+# display in frontend/lib/keywords.ts — keep the two in sync when editing keywords.
 OUTDOOR_KEYWORDS = {
     # Snow sports
     "ski", "skiing", "skier", "skis",
@@ -187,6 +189,9 @@ OUTDOOR_KEYWORDS = {
     "prepper", "preppers",
     "knife", "knives", "blade", "blades",
     "hatchet", "axe", "axes", "tomahawk",
+    # Water treatment / hydration (survival & camping gear)
+    "hydration", "hydrate", "canteen", "canteens",
+    "filtration", "purifier", "purifiers", "purification", "potable",
     # Mountain biking extras
     "singletrack", "enduro", "gravel",
     # Bird watching
@@ -228,7 +233,7 @@ PROPER_NOUNS = {
     "otter", "beaver", "mink", "marten", "wolverine", "badger", "muskrat", "weasel",
     "bison", "musk", "caribou", "pronghorn", "bighorn",
     # Landscape / geography
-    "ridge", "valley", "creek", "lake", "river", "pond", "bay", "cove",
+    "ridge", "valley", "creek", "lake", "river", "pond", "bay", "cove", "water",
     "inlet", "harbor", "peak", "summit", "bluff", "cliff", "canyon", "gorge",
     "gulch", "ravine", "hollow", "meadow", "prairie", "tundra", "rapids",
     "falls", "shore", "marsh", "delta", "dune", "glen", "fen", "moor",

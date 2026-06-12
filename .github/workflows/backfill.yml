@@ -1,4 +1,4 @@
-name: Backfill Site Classification
+name: Classify Pending Sites
 
 on:
   schedule:

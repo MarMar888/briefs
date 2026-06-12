@@ -417,6 +417,27 @@ td small {
   font-weight: 600;
 }
 
+.tags span.warn {
+  background: var(--red-soft);
+  border-color: transparent;
+  color: var(--red);
+}
+
+.audit {
+  display: grid;
+  gap: 6px;
+  max-width: 240px;
+}
+
+.audit small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+small.muted {
+  color: var(--muted);
+}
+
 .contact span {
   word-break: break-word;
 }
@@ -552,6 +573,39 @@ td small {
 .activityTable td,
 .activityTable th {
   white-space: nowrap;
+}
+
+/* ---------- keywords ---------- */
+.keywordGroups {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+}
+
+.keywordGroup {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+
+.keywordGroup h2 {
+  align-items: center;
+  color: var(--ink);
+  display: flex;
+  font-size: 14px;
+  font-weight: 700;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.keywordGroup h2 span {
+  background: var(--accent-soft);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
 }
 
 /* ---------- responsive ---------- */

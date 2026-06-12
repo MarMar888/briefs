@@ -10,7 +10,7 @@ DB_PATH = (
     or os.path.join(os.path.dirname(__file__), "domain_leads.sqlite3")
 )
 
-TERMINAL_STATUSES = {"matched", "not_outdoor", "non_us", "expired"}
+TERMINAL_STATUSES = {"matched", "not_outdoor", "non_us", "expired", "audit_rejected"}
 TRACKING_DAYS = int(os.environ.get("DOMAIN_TRACKING_DAYS", "180"))
 
 _SCHEMA = """
@@ -45,7 +45,22 @@ CREATE TABLE IF NOT EXISTS domains (
     human_reviewed        INTEGER NOT NULL DEFAULT 0,
     human_verdict         TEXT,
     human_review_notes    TEXT,
-    random_sample         INTEGER NOT NULL DEFAULT 0
+    random_sample         INTEGER NOT NULL DEFAULT 0,
+    -- deep-search audit enrichments (written by enricher.py)
+    owner_name            TEXT,
+    full_address          TEXT,
+    enriched_at           TEXT,
+    starred               INTEGER NOT NULL DEFAULT 0,
+    business_summary      TEXT,
+    business_size         TEXT,
+    employee_estimate     TEXT,
+    location_count        TEXT,
+    entity_type           TEXT,
+    social_links          TEXT,
+    side_project          INTEGER NOT NULL DEFAULT 0,
+    longevity             TEXT,
+    audit_notes           TEXT,
+    audit_verdict         TEXT
 )
 """
 
@@ -71,6 +86,16 @@ SELECT
     owner_name,
     full_address,
     enriched_at,
+    business_summary,
+    business_size,
+    employee_estimate,
+    location_count,
+    entity_type,
+    social_links,
+    side_project,
+    longevity,
+    audit_notes,
+    audit_verdict,
     classification_reason  AS reason,
     classified_at,
     source_date,
@@ -151,6 +176,16 @@ _MIGRATIONS = [
     "ALTER TABLE domains ADD COLUMN enriched_at TEXT",
     "ALTER TABLE domains ADD COLUMN random_sample INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE domains ADD COLUMN starred INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE domains ADD COLUMN business_summary TEXT",
+    "ALTER TABLE domains ADD COLUMN business_size TEXT",
+    "ALTER TABLE domains ADD COLUMN employee_estimate TEXT",
+    "ALTER TABLE domains ADD COLUMN location_count TEXT",
+    "ALTER TABLE domains ADD COLUMN entity_type TEXT",
+    "ALTER TABLE domains ADD COLUMN social_links TEXT",
+    "ALTER TABLE domains ADD COLUMN side_project INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE domains ADD COLUMN longevity TEXT",
+    "ALTER TABLE domains ADD COLUMN audit_notes TEXT",
+    "ALTER TABLE domains ADD COLUMN audit_verdict TEXT",
 ]
 
 
@@ -273,10 +308,18 @@ def get_unenriched_matches(limit: int = 0) -> list[dict]:
 
 
 def get_unalerted_matches() -> list[dict]:
-    """Return matched domains that have not been included in a Resend alert."""
+    """Return matched domains that are ready to alert.
+
+    Only audited leads are eligible: the deep-search audit is the second-stage
+    filter, and leads it disqualifies are demoted out of the matched view before
+    this runs. Requiring enriched_at IS NOT NULL ensures we never alert a lead
+    that has not yet cleared the audit.
+    """
     with closing(_db()) as conn:
         cursor = conn.execute(
-            "SELECT * FROM matched_domains WHERE email_sent_at IS NULL ORDER BY classified_at DESC"
+            "SELECT * FROM matched_domains "
+            "WHERE email_sent_at IS NULL AND enriched_at IS NOT NULL "
+            "ORDER BY classified_at DESC"
         )
         return _rows_to_dicts(cursor)
 
