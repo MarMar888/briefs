@@ -35,6 +35,7 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from classifier import _detect_cross_domain_redirect, _site_key
 from timeutil import utcnow
 from version import get_version
 
@@ -804,6 +805,21 @@ def _build_audit(info: dict, content: str, html: str) -> dict:
 def _enrich_row(row: dict) -> tuple[str, dict]:
     domain = row["domain"]
     url = row.get("website_url") or f"https://{domain}"
+
+    # Ignore redirects: a lead whose domain redirects to a different domain isn't a
+    # genuine site of its own. Suppress it (label, don't kill) and skip the crawl.
+    redirect = _detect_cross_domain_redirect(url)
+    if redirect:
+        rkey = _site_key(redirect)
+        return domain, {
+            "redirected_to": redirect,
+            "redirect_domain": rkey,
+            "audit_verdict": "disqualified",
+            "audit_notes": f"⚠ redirects to {rkey}",
+            "enriched_at": utcnow().isoformat(),
+            "enriched_version": get_version(),
+        }
+
     content, html = _fetch_pages(url)
 
     # Off-site search adds external age/size signals (directories, social, reviews).

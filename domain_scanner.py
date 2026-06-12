@@ -716,6 +716,18 @@ def _check_domain(row: dict) -> dict:
             "phone": site.get("phone", ""),
             "email": site.get("email", ""),
         }
+    if site.get("redirect_domain"):
+        # The NRD redirects to a different domain — it's not a genuine new-business
+        # site of its own. Reject outright rather than classifying the target.
+        verdict = {
+            "match": False, "score": 0, "score_category": "No Match",
+            "reason": f"redirects to {site['redirect_domain']}",
+            "location": "", "established": "", "is_template": False, "ecom_only": False,
+            "redirected_to": site.get("redirected_to", ""),
+            "redirect_domain": site.get("redirect_domain", ""),
+            "phone": site.get("phone", ""), "email": site.get("email", ""),
+        }
+        return {"row": row, "url": url, "pending_reason": None, "verdict": verdict}
     verdict = classify_domain(domain, site["content"])
     verdict["redirected_to"] = site.get("redirected_to", "")
     verdict["redirect_domain"] = site.get("redirect_domain", "")
