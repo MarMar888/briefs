@@ -168,6 +168,8 @@ async def _crawl4ai_fetch_async(url: str, max_chars: int) -> str:
     config = CrawlerRunConfig(
         excluded_tags=["nav", "footer", "aside"],
         remove_overlay_elements=True,
+        page_timeout=int(os.environ.get("ENRICH_PAGE_TIMEOUT_MS", "20000")),
+        verbose=False,
         markdown_generator=DefaultMarkdownGenerator(
             content_filter=PruningContentFilter(threshold=0.48, threshold_type="fixed"),
             options={"ignore_links": True},

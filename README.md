@@ -102,6 +102,26 @@ MVP notes: the audit currently runs **inline** in `run.py` after classification 
 standalone **Lead Audit** job draining any remainder. The longer-term shape is the same audit
 as a fully decoupled stage that delivery just reads from — already 80% there.
 
+## Versioning
+
+The pipeline version is a semver in the **`VERSION`** file at the repo root (the Python
+equivalent of an npm package version). `version.py` reads it and appends the short git sha as
+build metadata, e.g. `0.1.0+a1b2c3d` — locally from `git rev-parse`, in CI from `GITHUB_SHA`
+(provided automatically by GitHub Actions). `PIPELINE_VERSION` env var fully overrides it.
+
+Every lead records the exact pipeline version at each lifecycle stage, so any row traces back
+to the code that produced it:
+
+```text
+found_version       version that discovered/ingested the domain   (upsert)
+classified_version  version that classified it (matched/not_outdoor) (site phase)
+enriched_version    version that ran the deep-search audit          (enricher)
+```
+
+Each row in `pipeline_runs` also stores `pipeline_version`. **Bump `VERSION`** whenever the
+pipeline's behavior changes (new filters, scoring tweaks, audit logic) so you can tell which
+leads were produced before vs after the change.
+
 ## Setup
 
 ```bash

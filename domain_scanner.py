@@ -36,6 +36,8 @@ import requests
 import domain_store
 from classifier import validate_site, classify_domain
 from fetcher import Filing
+from timeutil import utcnow
+from version import get_version
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; lead-monitor/1.0)"}
 USA_TLDS = {".com", ".net", ".us"}
@@ -639,7 +641,7 @@ def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter:
         return {"geo_us": 0, "geo_non_us": 0, "geo_failed": 0}
 
     if keyword_filter:
-        now = datetime.utcnow().isoformat()
+        now = utcnow().isoformat()
         keyword_results = {r["domain"]: _matches_keywords(r["domain"]) for r in due}
         rejected = [r for r in due if not keyword_results[r["domain"]]]
         if rejected:
@@ -647,6 +649,7 @@ def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter:
             domain_store.batch_update_domains([
                 {"domain": r["domain"], "status": "not_outdoor",
                  "classification_reason": "no keyword match in domain name",
+                 "classified_version": get_version(),
                  "classified_at": now, "last_checked_at": now}
                 for r in rejected
             ])
@@ -664,7 +667,7 @@ def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter:
     country_by_ip = _geolocate_ips(sorted(set(ip_by_domain.values())))
 
     geo_us = geo_non_us = geo_failed = 0
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     updates = []
     for row in due:
         domain = row["domain"]
@@ -689,7 +692,7 @@ def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter:
                             "country_code": country, "last_checked_at": now, "attempt_count": count})
         else:
             geo_us += 1
-            next_check = (datetime.utcnow() + timedelta(days=defer_site_days)).isoformat() if defer_site_days else None
+            next_check = (utcnow() + timedelta(days=defer_site_days)).isoformat() if defer_site_days else None
             updates.append({"domain": domain, "status": "site_pending", "resolved_ip": ip,
                             "country_code": "US", "website_url": f"https://{domain}",
                             "next_check_at": next_check, "last_checked_at": now, "attempt_count": count})
@@ -713,6 +716,18 @@ def _check_domain(row: dict) -> dict:
             "phone": site.get("phone", ""),
             "email": site.get("email", ""),
         }
+    if site.get("redirect_domain"):
+        # The NRD redirects to a different domain — it's not a genuine new-business
+        # site of its own. Reject outright rather than classifying the target.
+        verdict = {
+            "match": False, "score": 0, "score_category": "No Match",
+            "reason": f"redirects to {site['redirect_domain']}",
+            "location": "", "established": "", "is_template": False, "ecom_only": False,
+            "redirected_to": site.get("redirected_to", ""),
+            "redirect_domain": site.get("redirect_domain", ""),
+            "phone": site.get("phone", ""), "email": site.get("email", ""),
+        }
+        return {"row": row, "url": url, "pending_reason": None, "verdict": verdict}
     verdict = classify_domain(domain, site["content"])
     verdict["redirected_to"] = site.get("redirected_to", "")
     verdict["redirect_domain"] = site.get("redirect_domain", "")
@@ -761,13 +776,13 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
             row = result["row"]
             domain = row["domain"]
             url = result["url"]
-            now = datetime.utcnow().isoformat()
+            now = utcnow().isoformat()
             count = row["attempt_count"] + 1
             prefix = f"[site {completed}/{total}] {domain}"
 
             if result["pending_reason"]:
                 interval_days = 7 * count
-                next_check_dt = datetime.utcnow() + timedelta(days=interval_days)
+                next_check_dt = utcnow() + timedelta(days=interval_days)
                 expires_at = _parse_iso(row.get("expires_at"))
 
                 if expires_at and next_check_dt > expires_at:
@@ -817,7 +832,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
                     "[ECOM]" if ecom_only else "",
                 ]))
                 print(f"{prefix} ✓ YES — {v['reason']}  {flags}", flush=True)
-                next_rescrape = (datetime.utcnow() + timedelta(days=rescrape_days)).isoformat()
+                next_rescrape = (utcnow() + timedelta(days=rescrape_days)).isoformat()
                 pending_updates.append({"domain": domain, "status": "matched",
                                         "classification_reason": v["reason"],
                                         "location": location, "established": established,
@@ -826,6 +841,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
                                         "redirected_to": redirected_to,
                                         "redirect_domain": redirect_domain,
                                         "phone": phone, "email": email,
+                                        "classified_version": get_version(),
                                         "next_check_at": next_rescrape,
                                         "classified_at": now, "last_checked_at": now,
                                         "attempt_count": count})
@@ -850,7 +866,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
                     score_cat = v.get("score_category", "")
                     score_tag = f" [{score_cat}:{score}]" if score >= 40 else ""
                     print(f"{prefix} ✗ NO — {v['reason']}{score_tag}", flush=True)
-                    next_rescrape = (datetime.utcnow() + timedelta(days=rescrape_days)).isoformat()
+                    next_rescrape = (utcnow() + timedelta(days=rescrape_days)).isoformat()
                     pending_updates.append({"domain": domain, "status": "not_outdoor",
                                             "classification_reason": v["reason"],
                                             "score": score, "score_category": score_cat,
@@ -858,6 +874,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
                                             "redirect_domain": v.get("redirect_domain", ""),
                                             "phone": v.get("phone", ""),
                                             "email": v.get("email", ""),
+                                            "classified_version": get_version(),
                                             "next_check_at": next_rescrape,
                                             "classified_at": now, "last_checked_at": now,
                                             "attempt_count": count})

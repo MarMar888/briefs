@@ -4,6 +4,9 @@ import time
 from contextlib import closing
 from datetime import datetime, timedelta
 
+from timeutil import utcnow
+from version import get_version
+
 DB_PATH = (
     os.environ.get("DOMAIN_DB_PATH")
     or os.environ.get("TURSO_DB_URL")
@@ -60,7 +63,11 @@ CREATE TABLE IF NOT EXISTS domains (
     side_project          INTEGER NOT NULL DEFAULT 0,
     longevity             TEXT,
     audit_notes           TEXT,
-    audit_verdict         TEXT
+    audit_verdict         TEXT,
+    -- pipeline provenance: which pipeline version touched the domain at each stage
+    found_version         TEXT,
+    classified_version    TEXT,
+    enriched_version      TEXT
 )
 """
 
@@ -96,6 +103,9 @@ SELECT
     longevity,
     audit_notes,
     audit_verdict,
+    found_version,
+    classified_version,
+    enriched_version,
     classification_reason  AS reason,
     classified_at,
     source_date,
@@ -112,6 +122,7 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     finished_at         TEXT,
     source              TEXT,
     status              TEXT NOT NULL DEFAULT 'running',
+    pipeline_version    TEXT,
     -- ingestion funnel
     downloaded          INTEGER,
     tld_filtered        INTEGER,
@@ -153,6 +164,7 @@ _RUNS_MIGRATIONS = [
     "ALTER TABLE pipeline_runs ADD COLUMN random_matched INTEGER",
     "ALTER TABLE pipeline_runs ADD COLUMN keyword_processed INTEGER",
     "ALTER TABLE pipeline_runs ADD COLUMN keyword_matched INTEGER",
+    "ALTER TABLE pipeline_runs ADD COLUMN pipeline_version TEXT",
 ]
 
 _MIGRATIONS = [
@@ -186,6 +198,9 @@ _MIGRATIONS = [
     "ALTER TABLE domains ADD COLUMN longevity TEXT",
     "ALTER TABLE domains ADD COLUMN audit_notes TEXT",
     "ALTER TABLE domains ADD COLUMN audit_verdict TEXT",
+    "ALTER TABLE domains ADD COLUMN found_version TEXT",
+    "ALTER TABLE domains ADD COLUMN classified_version TEXT",
+    "ALTER TABLE domains ADD COLUMN enriched_version TEXT",
 ]
 
 
@@ -233,18 +248,19 @@ def init_db() -> None:
 
 def upsert_new(domains: list[str], source_date: str, random_sample: bool = False) -> int:
     """Insert domains that don't exist yet. Returns count inserted."""
-    now_dt = datetime.utcnow()
+    now_dt = utcnow()
     now = now_dt.isoformat()
     expires_at = (now_dt + timedelta(days=TRACKING_DAYS)).isoformat()
     rs_flag = 1 if random_sample else 0
+    version = get_version()
     inserted = 0
     with closing(_db()) as conn:
         for domain in domains:
             cur = conn.execute(
                 "INSERT OR IGNORE INTO domains "
-                "(domain, source_date, first_seen_at, last_seen_at, expires_at, status, random_sample) "
-                "VALUES (?, ?, ?, ?, ?, 'new', ?)",
-                (domain, source_date, now, now, expires_at, rs_flag),
+                "(domain, source_date, first_seen_at, last_seen_at, expires_at, status, random_sample, found_version) "
+                "VALUES (?, ?, ?, ?, ?, 'new', ?, ?)",
+                (domain, source_date, now, now, expires_at, rs_flag, version),
             )
             inserted += cur.rowcount
         conn.commit()
@@ -263,7 +279,7 @@ def _rows_to_dicts(cursor) -> list[dict]:
 
 def get_due(statuses: list[str]) -> list[dict]:
     """Return domains with given statuses that are due for processing."""
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     ph = ",".join("?" * len(statuses))
     with closing(_db()) as conn:
         cursor = conn.execute(
@@ -277,7 +293,7 @@ def get_due(statuses: list[str]) -> list[dict]:
 
 def expire_stale() -> int:
     """Expire non-terminal domains whose 180-day tracking window has elapsed."""
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     ph = ",".join("?" * len(TERMINAL_STATUSES))
     with closing(_db()) as conn:
         cur = conn.execute(
@@ -292,8 +308,8 @@ def expire_stale() -> int:
 def requeue_rescrapes() -> int:
     """Move matched/not_outdoor domains back to site_pending when their rescrape date is due.
     Skips human-reviewed domains to preserve manual verdicts."""
-    now = datetime.utcnow().isoformat()
-    new_expires = (datetime.utcnow() + timedelta(days=TRACKING_DAYS)).isoformat()
+    now = utcnow().isoformat()
+    new_expires = (utcnow() + timedelta(days=TRACKING_DAYS)).isoformat()
     with closing(_db()) as conn:
         cur = conn.execute(
             "UPDATE domains SET status = 'site_pending', email_sent_at = NULL, "
@@ -314,6 +330,29 @@ def get_unenriched_matches(limit: int = 0) -> list[dict]:
         if limit > 0:
             sql += f" LIMIT {limit}"
         cursor = conn.execute(sql)
+        return _rows_to_dicts(cursor)
+
+
+def get_matches_to_reaudit(limit: int = 0, stale_only: bool = True) -> list[dict]:
+    """Return matched domains to re-run through the deep-search audit.
+
+    stale_only=True (default) returns only leads whose enriched_version is not the
+    current semver — i.e. those not yet caught up to the running pipeline version
+    (including never-audited NULLs). This makes a re-audit idempotent: re-running
+    skips leads already on the current version.
+    stale_only=False returns every matched lead.
+    """
+    with closing(_db()) as conn:
+        sql = "SELECT * FROM domains WHERE status = 'matched'"
+        params: tuple = ()
+        if stale_only:
+            semver = get_version().split("+")[0]
+            sql += " AND (enriched_version IS NULL OR enriched_version NOT LIKE ?)"
+            params = (f"{semver}%",)
+        sql += " ORDER BY score DESC"
+        if limit > 0:
+            sql += f" LIMIT {limit}"
+        cursor = conn.execute(sql, params)
         return _rows_to_dicts(cursor)
 
 
@@ -338,7 +377,7 @@ def get_unalerted_matches() -> list[dict]:
 def mark_alert_sent(domains: list[str]) -> None:
     if not domains:
         return
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     ph = ",".join("?" * len(domains))
     with closing(_db()) as conn:
         conn.execute(
@@ -386,7 +425,7 @@ def _execute_with_retry(fn, retries: int = 3, backoff: float = 1.0):
 def update_domain(domain: str, **fields) -> None:
     if not fields:
         return
-    fields["last_seen_at"] = datetime.utcnow().isoformat()
+    fields["last_seen_at"] = utcnow().isoformat()
     set_clause = ", ".join(f"{k} = ?" for k in fields)
 
     def _run():
@@ -407,7 +446,7 @@ def batch_update_domains(updates: list, chunk_size: int = 100) -> None:
     fields to set.  All updates in a chunk share one connection and one
     commit, cutting Turso round-trips from O(n) to O(n/chunk_size).
     """
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     for i in range(0, len(updates), chunk_size):
         chunk = updates[i : i + chunk_size]
 
@@ -430,11 +469,12 @@ def batch_update_domains(updates: list, chunk_size: int = 100) -> None:
 
 def start_run(source: str) -> int:
     """Record the start of a pipeline run. Returns the new run id."""
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     with closing(_db()) as conn:
         cur = conn.execute(
-            "INSERT INTO pipeline_runs (started_at, source, status) VALUES (?, ?, 'running')",
-            (now, source),
+            "INSERT INTO pipeline_runs (started_at, source, status, pipeline_version) "
+            "VALUES (?, ?, 'running', ?)",
+            (now, source, get_version()),
         )
         conn.commit()
         return cur.lastrowid
@@ -462,7 +502,7 @@ def finish_run(
     keyword_processed: int | None = None,
     keyword_matched: int | None = None,
 ) -> None:
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     status = "error" if error else "done"
     with closing(_db()) as conn:
         conn.execute(
