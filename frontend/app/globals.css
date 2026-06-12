@@ -408,6 +408,7 @@ td small {
   align-items: start;
   display: flex;
   flex-wrap: wrap;
+  max-width: 180px;
 }
 
 .tags span {
@@ -415,6 +416,9 @@ td small {
   border: 1px solid var(--line-strong);
   color: var(--muted);
   font-weight: 600;
+  white-space: normal;
+  word-break: break-word;
+  max-width: 160px;
 }
 
 .tags span.warn {
@@ -426,7 +430,8 @@ td small {
 .audit {
   display: grid;
   gap: 6px;
-  max-width: 240px;
+  max-width: 220px;
+  min-width: 0;
 }
 
 .audit small {
@@ -445,7 +450,8 @@ small.muted {
 .reason {
   color: var(--muted);
   line-height: 1.55;
-  min-width: 220px;
+  min-width: 200px;
+  max-width: 260px;
 }
 
 /* ---------- review controls ---------- */
