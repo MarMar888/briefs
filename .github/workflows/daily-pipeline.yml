@@ -1,4 +1,4 @@
-name: Daily Domain Pipeline
+name: Ingest New Domains
 
 on:
   schedule:
@@ -32,3 +32,6 @@ jobs:
           ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
           ALERT_FROM: ${{ secrets.ALERT_FROM }}
           FIRECRAWL_TIMEOUT_SECONDS: "15"
+          # Optional off-site search for the deep-search audit (no-ops if unset)
+          BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
+          SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}

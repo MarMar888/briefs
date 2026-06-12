@@ -1,4 +1,4 @@
-name: Enrich Matched Domains
+name: Enrich Matched Leads
 
 on:
   schedule:
@@ -38,3 +38,6 @@ jobs:
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           FIRECRAWL_TIMEOUT_SECONDS: "15"
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Optional off-site search (no-ops if unset)
+          BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
+          SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}

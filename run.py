@@ -110,6 +110,13 @@ def main():
         print(f"[run] {len(domain_filings)} new USA-hosted domains queued for classification")
         filings.extend(domain_filings)
 
+        # Second-stage filter: deep-search audit runs BEFORE alerting so only
+        # audit-passed leads are emailed. Disqualified leads (established
+        # businesses / side projects) are demoted out of the matched set here.
+        from enricher import run_enrichment
+        print("[run] Running deep-search audit on newly matched leads...")
+        run_enrichment()
+
         unalerted = domain_store.get_unalerted_matches()
         if unalerted and send_match_alerts(unalerted):
             domain_store.mark_alert_sent([match["domain"] for match in unalerted])

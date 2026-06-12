@@ -7,8 +7,21 @@ export const pipelineRuns = sqliteTable("pipeline_runs", {
   source: text("source"),
   status: text("status").notNull().default("running"),
   downloaded: integer("downloaded"),
+  tldFiltered: integer("tld_filtered"),
+  keywordFiltered: integer("keyword_filtered"),
+  randomInserted: integer("random_inserted"),
   inserted: integer("inserted"),
+  geoUs: integer("geo_us"),
+  geoNonUs: integer("geo_non_us"),
+  geoFailed: integer("geo_failed"),
+  siteProcessed: integer("site_processed"),
   matched: integer("matched"),
+  siteNotOutdoor: integer("site_not_outdoor"),
+  sitePendingRetry: integer("site_pending_retry"),
+  randomProcessed: integer("random_processed"),
+  randomMatched: integer("random_matched"),
+  keywordProcessed: integer("keyword_processed"),
+  keywordMatched: integer("keyword_matched"),
   expired: integer("expired"),
   error: text("error"),
 });
@@ -46,7 +59,20 @@ export const domains = sqliteTable("domains", {
   humanReviewed: integer("human_reviewed", { mode: "boolean" }).notNull().default(false),
   humanVerdict: text("human_verdict"),
   humanReviewNotes: text("human_review_notes"),
-  starred: integer("starred", { mode: "boolean" }).notNull().default(false)
+  starred: integer("starred", { mode: "boolean" }).notNull().default(false),
+  ownerName: text("owner_name"),
+  fullAddress: text("full_address"),
+  enrichedAt: text("enriched_at"),
+  businessSummary: text("business_summary"),
+  businessSize: text("business_size"),
+  employeeEstimate: text("employee_estimate"),
+  locationCount: text("location_count"),
+  entityType: text("entity_type"),
+  socialLinks: text("social_links"),
+  sideProject: integer("side_project", { mode: "boolean" }).notNull().default(false),
+  longevity: text("longevity"),
+  auditNotes: text("audit_notes"),
+  auditVerdict: text("audit_verdict")
 });
 
 export type Domain = typeof domains.$inferSelect;

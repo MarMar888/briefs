@@ -7,6 +7,7 @@ export type LeadFilters = {
   maxScore?: number;
   ecomOnly?: "all" | "yes" | "no";
   reviewed?: "all" | "yes" | "no" | "approved" | "rejected" | "starred";
+  audit?: "all" | "qualified" | "filtered" | "unaudited";
 };
 
 export async function getLeadStats() {
@@ -33,7 +34,18 @@ export async function getLeadStats() {
 
 export async function getMatchedLeads(filters: LeadFilters) {
   const db = getDb();
-  const clauses = [eq(domains.status, "matched")];
+  // "filtered" shows leads the deep-search audit demoted out of the matched set;
+  // everything else looks at the live matched leads.
+  const clauses =
+    filters.audit === "filtered"
+      ? [eq(domains.status, "audit_rejected")]
+      : [eq(domains.status, "matched")];
+
+  if (filters.audit === "qualified") {
+    clauses.push(eq(domains.auditVerdict, "qualified"));
+  } else if (filters.audit === "unaudited") {
+    clauses.push(sql`${domains.enrichedAt} is null`);
+  }
 
   if (typeof filters.minScore === "number") {
     clauses.push(gte(domains.score, filters.minScore));
