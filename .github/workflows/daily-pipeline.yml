@@ -26,7 +26,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Install Playwright browsers
-        run: playwright install chromium --with-deps
+        run: python -m playwright install chromium --with-deps
 
       - name: Run domain pipeline
         run: python run.py --domains-only --domain-source domainsmonitor --keywords --site-limit 200
