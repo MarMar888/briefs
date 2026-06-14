@@ -79,8 +79,10 @@ def main() -> None:
                     help="outdoor | construction (default: VERTICAL env, or outdoor)")
     ap.add_argument("--find", metavar="FILE",
                     help="First find leads from this domain file (one per line), then audit them")
-    ap.add_argument("--site-limit", type=int, default=0,
-                    help="Max sites to classify during --find (0 = all)")
+    ap.add_argument("--limit", type=int, default=10,
+                    help="Max leads to audit this run (default: 10; 0 = no limit)")
+    ap.add_argument("--site-limit", type=int, default=10,
+                    help="Max sites to classify during --find (default: 10; 0 = all)")
     ap.add_argument("--reaudit", action="store_true",
                     help="Re-audit every matched lead (use after changing prompts), not just new ones")
     args = ap.parse_args()
@@ -100,8 +102,10 @@ def main() -> None:
             profile=profile,
         )
 
-    print(f"[eval] Auditing {'all' if args.reaudit else 'new'} {profile.name} matched leads ...", flush=True)
-    run_enrichment(limit=0, reaudit="all" if args.reaudit else None, profile=profile)
+    scope = "all" if args.reaudit else "new"
+    cap = f"limit {args.limit}" if args.limit else "no limit"
+    print(f"[eval] Auditing {scope} {profile.name} matched leads ({cap}) ...", flush=True)
+    run_enrichment(limit=args.limit, reaudit="all" if args.reaudit else None, profile=profile)
 
     report(profile)
 
