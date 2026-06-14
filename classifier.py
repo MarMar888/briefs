@@ -514,6 +514,15 @@ def _reason_contradicts_match(reason: str) -> bool:
             "outside the defined",
             "too sparse to determine",
             "content is too sparse",
+            # LLM recognized it's not a real business but hedged on score
+            # (e.g. industry-themed tools/calculators/directories/blogs).
+            "lack of clarity on whether",
+            "collection of calculator",
+            "rather than a real",
+            "not a real business",
+            "not a real company",
+            "no information on the business",
+            "no information about the business",
         )
     )
 

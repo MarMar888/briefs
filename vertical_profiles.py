@@ -118,10 +118,12 @@ Lead quality gate:
 - US-only. If the content names an explicit non-US location (e.g. "Toronto, Canada", "London, UK", "Sydney, Australia"), score below 25. Do NOT guess that unfamiliar place names are US cities.
 - A one-person handyman or hobby / side-gig with no crew, no real spend, a free email, and no business entity is a WEAK lead — score at most 45.
 - Generic template / starter / parked / "coming soon" sites with no real business detail — score at most 45.
-- Directories or aggregators that LIST contractors (rather than being one) do not qualify — score at most 24.
+- The site must be an actual company that PERFORMS construction work — not a tool or content ABOUT construction. Score at most 24 for: online calculators, estimators, cost/material tools, apps, plugins, or SaaS (even construction-themed, e.g. a "build cost calculator"); directories, marketplaces, or "find a contractor" listing sites; blogs, news, magazines, guides, or info/education sites; and lead-generation or marketing sites. If the page is a tool or information with no evidence of a real operating contractor (no services performed, no crew or projects, no company identity or contact), score at most 24 even when the subject is construction.
 - NOT construction (score at most 24): restoration / remediation (water, fire, mold), real-estate brokerage / realty / property management, pure building-materials ECOMMERCE with no field operations, industrial / product manufacturing, and software / marketing / recruiting companies that merely serve the construction industry.
 
 Important: established age is NOT a disqualifier here. A contractor "serving since 1985" or "family owned for 3 generations" is a perfectly good lead — score on operating scale and spend, not on novelty.
+
+A lead only scores 70 or above if the content shows a REAL OPERATING COMPANY that performs construction work — an identifiable contractor doing services or projects, with contact or location details. Construction-themed tools, calculators, directories, and content/blog sites never reach 70, no matter how relevant the topic.
 
 Domain: {domain}
 Website content: {content}
@@ -131,7 +133,7 @@ Score the lead from 0-100 using this scale:
   70-89:  Likely match — fits a construction trade but some detail is thin (sparse content, unclear scale or location).
   50-69:  Borderline — construction-adjacent but a key qualifier is uncertain (could be solo, could be a supplier, scale unclear).
   25-49:  Weak — construction-themed name but no real operating business shown, or a tiny solo / handyman operation.
-  0-24:   No match — not construction, a directory / aggregator, parked / template, or non-US.
+  0-24:   No match — not an actual contractor: a tool / calculator / app / SaaS, a directory or blog/content site, parked / template, non-US, or otherwise not a real construction company.
 
 Answer with exactly this format:
 SCORE: 0-100
