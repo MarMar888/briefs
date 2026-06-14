@@ -46,6 +46,7 @@ jobs:
           python run.py \
             --domains-only \
             --skip-domain-import \
+            --domain-source domainsmonitor-file \
             --keywords \
             --geo-limit "$GEO_LIMIT" \
             --site-limit "$LIMIT"
