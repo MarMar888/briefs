@@ -38,6 +38,7 @@ from classifier import validate_site, classify_domain
 from fetcher import Filing
 from timeutil import utcnow
 from version import get_version
+from vertical_profiles import get_profile
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; lead-monitor/1.0)"}
 USA_TLDS = {".com", ".net", ".us"}
@@ -56,8 +57,10 @@ DOMAIN_RE = re.compile(r"^(?:https?://)?(?:www\.)?([a-z0-9][a-z0-9-]*(?:\.[a-z0-
 
 # Domain name keywords for pre-filtering NRDs before geo/scrape.
 # Used as a set for O(1) token lookup in _matches_keywords.
-# NOTE: This set is the source of truth for the scanner. The website mirrors it for
-# display in frontend/lib/keywords.ts — keep the two in sync when editing keywords.
+# NOTE: This is the OUTDOOR vertical's keyword set. It is wrapped (unchanged) by the
+# 'outdoor' VerticalProfile in vertical_profiles.py, which is the per-vertical source
+# of truth the scanner now reads; the construction set lives there too. The website
+# mirrors these for display in frontend/lib/keywords.ts — keep them in sync.
 OUTDOOR_KEYWORDS = {
     # Snow sports
     "ski", "skiing", "skier", "skis",
@@ -290,14 +293,20 @@ def _is_junk_domain(domain: str) -> bool:
     return False
 
 
-def _matches_keywords(domain: str) -> bool:
-    """Return True if the domain should be scraped.
+def _matches_keywords(domain: str, profile=None) -> bool:
+    """Return True if the domain should be scraped, per the active vertical profile.
 
-    Default path: any proper noun token (animal, landscape, plant, mineral,
-    regional term) with no generic business descriptor present.
-    Keyword path: explicit outdoor activity word (kept as additional signal).
+    Proper-noun path: any evocative token (animal, landscape, plant, mineral,
+    regional term) with no generic-business descriptor present. Disabled when the
+    profile sets use_proper_noun_path=False (e.g. construction relies on trade words).
+    Keyword path: an explicit activity/trade token (plus a substring pass for
+    abbreviations wordninja mangles, e.g. "hvac"). For profiles with
+    reject_on_keyword_path=True, a co-occurring reject token vetoes the match.
     Either path triggers inclusion.
     """
+    if profile is None:
+        profile = get_profile()
+
     if _is_junk_domain(domain):
         return False
 
@@ -309,20 +318,35 @@ def _matches_keywords(domain: str) -> bool:
     for part in parts:
         all_tokens.extend(wordninja.split(part) or [part])
 
-    # Default path: proper noun present, no generic business descriptor
-    if (any(t in PROPER_NOUNS for t in all_tokens)
-            and not any(t in _GENERIC_BUSINESS_TOKENS for t in all_tokens)):
+    has_reject = any(t in profile.reject_tokens for t in all_tokens)
+
+    # Proper-noun path: proper noun present, no generic business descriptor
+    if (profile.use_proper_noun_path
+            and any(t in profile.proper_nouns for t in all_tokens)
+            and not has_reject):
         return True
 
-    # Keyword path: explicit outdoor activity word
-    if any(t in OUTDOOR_KEYWORDS for t in all_tokens):
+    # Keyword path: explicit activity/trade token, with a substring fallback for
+    # abbreviations the tokenizer splits oddly (e.g. "hvac" inside "joneshvac").
+    keyword_hit = any(t in profile.keywords for t in all_tokens)
+    if not keyword_hit and profile.substring_keywords:
+        joined = "".join(parts)
+        keyword_hit = any(sub in joined for sub in profile.substring_keywords)
+    if keyword_hit:
+        # Outdoor keeps the historical behavior (an explicit keyword always wins).
+        # Construction vetoes when a clearly-non-construction token co-occurs.
+        if profile.reject_on_keyword_path and has_reject:
+            return False
         return True
 
     return False
 
 
-def _filter_keyword_batch(domains: list[str]) -> tuple[int, list[str]]:
-    return len(domains), [domain for domain in domains if _matches_keywords(domain)]
+def _filter_keyword_batch(domains: list[str], profile_name: str) -> tuple[int, list[str]]:
+    # Runs in a ProcessPoolExecutor worker: resolve the profile by name in the
+    # child (cheap + cached) rather than pickling the dataclass across processes.
+    profile = get_profile(profile_name)
+    return len(domains), [domain for domain in domains if _matches_keywords(domain, profile)]
 
 
 def _iter_chunks(items: list[str], size: int):
@@ -330,11 +354,13 @@ def _iter_chunks(items: list[str], size: int):
         yield items[i:i + size]
 
 
-def _keyword_filter_domains(domains: list[str], workers: int = 1) -> list[str]:
+def _keyword_filter_domains(domains: list[str], workers: int = 1, profile=None) -> list[str]:
+    if profile is None:
+        profile = get_profile()
     if not domains:
         return []
     if workers <= 1 or len(domains) <= KEYWORD_BATCH_SIZE:
-        return [domain for domain in domains if _matches_keywords(domain)]
+        return [domain for domain in domains if _matches_keywords(domain, profile)]
 
     total_chunks = (len(domains) + KEYWORD_BATCH_SIZE - 1) // KEYWORD_BATCH_SIZE
     progress_every = max(1, total_chunks // 20)
@@ -354,7 +380,7 @@ def _keyword_filter_domains(domains: list[str], workers: int = 1) -> list[str]:
     with ProcessPoolExecutor(max_workers=workers) as executor:
         while len(pending) < max_pending:
             try:
-                pending.add(executor.submit(_filter_keyword_batch, next(chunk_iter)))
+                pending.add(executor.submit(_filter_keyword_batch, next(chunk_iter), profile.name))
             except StopIteration:
                 break
 
@@ -374,7 +400,7 @@ def _keyword_filter_domains(domains: list[str], workers: int = 1) -> list[str]:
                     )
 
                 try:
-                    pending.add(executor.submit(_filter_keyword_batch, next(chunk_iter)))
+                    pending.add(executor.submit(_filter_keyword_batch, next(chunk_iter), profile.name))
                 except StopIteration:
                     pass
 
@@ -634,15 +660,18 @@ def _geolocate_ips(ips: list[str]) -> dict[str, str]:
     return country_by_ip
 
 
-def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter: bool = False) -> dict:
+def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter: bool = False,
+                   profile=None) -> dict:
     """Run geo phase. Returns counts: geo_us, geo_non_us, geo_failed."""
-    due = domain_store.get_due(["new", "geo_pending"])
+    if profile is None:
+        profile = get_profile()
+    due = domain_store.get_due(["new", "geo_pending"], industry=profile.name)
     if not due:
         return {"geo_us": 0, "geo_non_us": 0, "geo_failed": 0}
 
     if keyword_filter:
         now = utcnow().isoformat()
-        keyword_results = {r["domain"]: _matches_keywords(r["domain"]) for r in due}
+        keyword_results = {r["domain"]: _matches_keywords(r["domain"], profile) for r in due}
         rejected = [r for r in due if not keyword_results[r["domain"]]]
         if rejected:
             print(f"[domain_scanner]   Geo keyword filter: skipping {len(rejected)} non-keyword domains", flush=True)
@@ -701,8 +730,10 @@ def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter:
     return {"geo_us": geo_us, "geo_non_us": geo_non_us, "geo_failed": geo_failed}
 
 
-def _check_domain(row: dict) -> dict:
+def _check_domain(row: dict, profile=None) -> dict:
     """Fetch and classify one domain. Runs in a thread pool worker."""
+    if profile is None:
+        profile = get_profile()
     domain = row["domain"]
     url = row["website_url"] or f"https://{domain}"
     site = validate_site(url)
@@ -728,7 +759,7 @@ def _check_domain(row: dict) -> dict:
             "phone": site.get("phone", ""), "email": site.get("email", ""),
         }
         return {"row": row, "url": url, "pending_reason": None, "verdict": verdict}
-    verdict = classify_domain(domain, site["content"])
+    verdict = classify_domain(domain, site["content"], profile)
     verdict["redirected_to"] = site.get("redirected_to", "")
     verdict["redirect_domain"] = site.get("redirect_domain", "")
     verdict["phone"] = site.get("phone", "")
@@ -745,8 +776,11 @@ def _parse_iso(value: str | None) -> datetime | None:
         return None
 
 
-def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 30) -> tuple[list[Filing], dict]:
-    due = domain_store.get_due(["site_pending"])
+def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 30,
+                    profile=None) -> tuple[list[Filing], dict]:
+    if profile is None:
+        profile = get_profile()
+    due = domain_store.get_due(["site_pending"], industry=profile.name)
     if not due:
         return [], {"random_processed": 0, "random_matched": 0, "keyword_processed": 0, "keyword_matched": 0}
     if site_limit > 0:
@@ -769,7 +803,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
             pending_updates.clear()
 
     with ThreadPoolExecutor(max_workers=SITE_WORKERS) as executor:
-        futures = {executor.submit(_check_domain, row): row for row in due}
+        futures = {executor.submit(_check_domain, row, profile): row for row in due}
         for future in as_completed(futures):
             completed += 1
             result = future.result()
@@ -913,6 +947,7 @@ def scan_new_domains(
     site_limit: int = 0,
     geo_limit: int = 0,
     rescrape_days: int = 30,
+    profile=None,
 ) -> tuple[list[Filing], dict]:
     """
     Run the full domain pipeline and return Filing objects for newly matched domains.
@@ -928,7 +963,11 @@ def scan_new_domains(
         domainkits_path: File or directory of DomainKits downloads for domainkits-file.
         domainsmonitor_path: File or directory of domains-monitor downloads for domainsmonitor-file.
         skip_import:    If True, skip source import/filtering and process queued SQLite rows.
+        profile:        Active VerticalProfile; selects keywords/prompts and the industry
+                        label stamped on every row. Defaults to the active vertical.
     """
+    if profile is None:
+        profile = get_profile()
     domain_store.init_db()
     expired = domain_store.expire_stale()
     if expired:
@@ -989,7 +1028,7 @@ def scan_new_domains(
             tld_total += len(tld_ok)
 
             if keyword_filter:
-                kw = _keyword_filter_domains(tld_ok, workers=keyword_workers)
+                kw = _keyword_filter_domains(tld_ok, workers=keyword_workers, profile=profile)
                 keyword_matched_domains.extend((source_date, d) for d in kw)
                 all_tld_filtered.extend((source_date, d) for d in tld_ok)
             else:
@@ -1006,7 +1045,7 @@ def scan_new_domains(
         for source_date, domain in keyword_matched_domains:
             domains_by_date.setdefault(source_date, []).append(domain)
         for source_date, domains in domains_by_date.items():
-            inserted_total += domain_store.upsert_new(domains, source_date, random_sample=False)
+            inserted_total += domain_store.upsert_new(domains, source_date, random_sample=False, industry=profile.name)
 
         # Random sample from non-keyword domains — gives opaque brand names a shot at classification.
         # Set RANDOM_SAMPLE_SIZE=0 to disable. Tracked separately in hit-rate logs so you can see
@@ -1022,7 +1061,7 @@ def scan_new_domains(
                 for source_date, domain in sample:
                     sample_by_date.setdefault(source_date, []).append(domain)
                 for source_date, domains in sample_by_date.items():
-                    n = domain_store.upsert_new(domains, source_date, random_sample=True)
+                    n = domain_store.upsert_new(domains, source_date, random_sample=True, industry=profile.name)
                     random_inserted += n
                     inserted_total += n
 
@@ -1039,11 +1078,11 @@ def scan_new_domains(
     if skip_geo:
         print("[domain_scanner] Skipping geo phase", flush=True)
     else:
-        geo_stats = _run_geo_phase(defer_site_days=defer_site_days, geo_limit=geo_limit, keyword_filter=keyword_filter)
+        geo_stats = _run_geo_phase(defer_site_days=defer_site_days, geo_limit=geo_limit, keyword_filter=keyword_filter, profile=profile)
 
     # 4. Site phase: site_pending → matched or not_outdoor
     filing_date = today.strftime("%m/%d/%Y")
-    matched, site_stats = _run_site_phase(filing_date, site_limit=site_limit, rescrape_days=rescrape_days)
+    matched, site_stats = _run_site_phase(filing_date, site_limit=site_limit, rescrape_days=rescrape_days, profile=profile)
     print(f"[domain_scanner] {len(matched)} newly matched domains", flush=True)
 
     # Log random sample vs keyword effectiveness so we can evaluate whether the sample is pulling weight

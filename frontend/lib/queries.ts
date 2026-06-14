@@ -8,22 +8,24 @@ export type LeadFilters = {
   ecomOnly?: "all" | "yes" | "no";
   reviewed?: "all" | "yes" | "no" | "approved" | "rejected" | "starred";
   audit?: "active" | "all" | "qualified" | "filtered" | "unaudited";
+  industry?: string;
 };
 
-export async function getLeadStats() {
+export async function getLeadStats(industry?: string) {
   const db = getDb();
+  const industryClause = industry ? eq(domains.industry, industry) : undefined;
   const [matched] = await db
     .select({
       total: count(),
       averageScore: avg(domains.score)
     })
     .from(domains)
-    .where(eq(domains.status, "matched"));
+    .where(and(eq(domains.status, "matched"), industryClause));
 
   const [pendingReview] = await db
     .select({ total: count() })
     .from(domains)
-    .where(and(eq(domains.status, "matched"), eq(domains.humanReviewed, false)));
+    .where(and(eq(domains.status, "matched"), eq(domains.humanReviewed, false), industryClause));
 
   return {
     totalMatched: Number(matched?.total ?? 0),
@@ -38,6 +40,10 @@ export async function getMatchedLeads(filters: LeadFilters) {
   // Default "active" hides audit-disqualified leads (established / side project);
   // "filtered" surfaces exactly those for inspection.
   const clauses = [eq(domains.status, "matched")];
+
+  if (filters.industry) {
+    clauses.push(eq(domains.industry, filters.industry));
+  }
 
   if (filters.audit === "filtered") {
     clauses.push(eq(domains.auditVerdict, "disqualified"));
@@ -81,19 +87,25 @@ export async function getMatchedLeads(filters: LeadFilters) {
     .limit(250);
 }
 
-export async function getPendingDomains() {
+export async function getPendingDomains(industry?: string) {
   return getDb()
     .select()
     .from(domains)
-    .where(inArray(domains.status, ["new", "geo_pending", "site_pending"]))
+    .where(
+      and(
+        inArray(domains.status, ["new", "geo_pending", "site_pending"]),
+        industry ? eq(domains.industry, industry) : undefined
+      )
+    )
     .orderBy(sql`${domains.expiresAt} asc nulls last`, sql`${domains.nextCheckAt} asc nulls first`)
     .limit(500);
 }
 
-export async function getPipelineRuns(limit = 100) {
+export async function getPipelineRuns(limit = 100, industry?: string) {
   return getDb()
     .select()
     .from(pipelineRuns)
+    .where(industry ? eq(pipelineRuns.industry, industry) : undefined)
     .orderBy(desc(pipelineRuns.startedAt))
     .limit(limit);
 }

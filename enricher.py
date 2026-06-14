@@ -38,6 +38,7 @@ from openai import OpenAI
 from classifier import _detect_cross_domain_redirect, _site_key
 from timeutil import utcnow
 from version import get_version
+from vertical_profiles import get_profile
 
 load_dotenv()
 
@@ -586,7 +587,9 @@ def _external_signals(domain: str, html: str, location: str) -> str:
     return "\n".join(lines)[:2500]
 
 
-def _extract_info(content: str) -> dict:
+def _extract_info(content: str, profile=None) -> dict:
+    if profile is None:
+        profile = get_profile()
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key or not content.strip():
         return {}
@@ -600,7 +603,7 @@ def _extract_info(content: str) -> dict:
         try:
             resp = client.chat.completions.create(
                 model=model,
-                messages=[{"role": "user", "content": ENRICH_PROMPT.format(content=content)}],
+                messages=[{"role": "user", "content": profile.enrich_prompt.format(content=content)}],
                 temperature=0,
                 max_tokens=320,
             )
@@ -798,8 +801,10 @@ def _is_free_email(email: str) -> bool:
     return email.split("@")[-1].strip().lower() in _FREE_EMAIL_DOMAINS
 
 
-def _build_audit(info: dict, content: str, html: str) -> dict:
+def _build_audit(info: dict, content: str, html: str, profile=None) -> dict:
     """Layer deterministic signals on top of the LLM extraction and roll up audit_notes."""
+    if profile is None:
+        profile = get_profile()
     established = info.get("established", "")
     longevity, is_old, longevity_signals = _assess_longevity(established, content)
     info["longevity"] = longevity
@@ -827,7 +832,7 @@ def _build_audit(info: dict, content: str, html: str) -> dict:
         free_email,
         not info.get("entity_type"),
     ])
-    if solo_signals >= 3:
+    if solo_signals >= profile.side_project_solo_threshold:
         side_project = True
     info["side_project"] = 1 if side_project else 0
 
@@ -835,7 +840,10 @@ def _build_audit(info: dict, content: str, html: str) -> dict:
     # that still slip past the classifier — established businesses (that merely
     # registered a fresh domain) and tiny hobby/side projects.
     disqualifiers: list[str] = []
-    if is_old:
+    if profile.disqualify_on_longevity and is_old:
+        # Outdoor only: an established business that just registered a domain is a
+        # weak lead. Construction (disqualify_on_longevity=False) keeps it — the age
+        # still shows on the dashboard (via `longevity`) but never suppresses.
         disqualifiers.append(f"established business ({longevity})")
     if side_project:
         disqualifiers.append("looks like a hobby/side project")
@@ -860,7 +868,9 @@ def _build_audit(info: dict, content: str, html: str) -> dict:
     return info
 
 
-def _enrich_row(row: dict) -> tuple[str, dict]:
+def _enrich_row(row: dict, profile=None) -> tuple[str, dict]:
+    if profile is None:
+        profile = get_profile()
     domain = row["domain"]
     url = row.get("website_url") or f"https://{domain}"
 
@@ -888,8 +898,8 @@ def _enrich_row(row: dict) -> tuple[str, dict]:
     if external:
         audit_content = f"{content}\n\n=== EXTERNAL SEARCH RESULTS ===\n{external}"
 
-    info = _extract_info(audit_content) if audit_content.strip() else {}
-    info = _build_audit(info, content, html)  # deterministic checks on site content only
+    info = _extract_info(audit_content, profile) if audit_content.strip() else {}
+    info = _build_audit(info, content, html, profile)  # deterministic checks on site content only
     info["enriched_at"] = utcnow().isoformat()
     info["enriched_version"] = get_version()
 
@@ -899,24 +909,29 @@ def _enrich_row(row: dict) -> tuple[str, dict]:
     return domain, info
 
 
-def run_enrichment(limit: int = 0, reaudit: str | None = None) -> int:
-    """Audit matched leads.
+def run_enrichment(limit: int = 0, reaudit: str | None = None, profile=None) -> int:
+    """Audit matched leads for the active vertical.
 
     reaudit=None  → only not-yet-audited leads (default daily behavior).
     reaudit="stale" → re-audit leads not on the current pipeline version (catch-up).
     reaudit="all"   → re-audit every matched lead.
+
+    Only the active vertical's leads are audited (each row is scoped by industry),
+    so a construction audit never touches outdoor leads and vice-versa.
     """
+    if profile is None:
+        profile = get_profile()
     import domain_store
     domain_store.init_db()
 
     if reaudit == "all":
-        rows = domain_store.get_matches_to_reaudit(limit=limit, stale_only=False)
+        rows = domain_store.get_matches_to_reaudit(limit=limit, stale_only=False, industry=profile.name)
         mode = "re-auditing ALL matched"
     elif reaudit == "stale":
-        rows = domain_store.get_matches_to_reaudit(limit=limit, stale_only=True)
+        rows = domain_store.get_matches_to_reaudit(limit=limit, stale_only=True, industry=profile.name)
         mode = f"re-auditing matched not on {get_version().split('+')[0]}"
     else:
-        rows = domain_store.get_unenriched_matches(limit=limit)
+        rows = domain_store.get_unenriched_matches(limit=limit, industry=profile.name)
         mode = "auditing new matched"
 
     if not rows:
@@ -935,7 +950,7 @@ def run_enrichment(limit: int = 0, reaudit: str | None = None) -> int:
     rejected = 0
 
     with ThreadPoolExecutor(max_workers=_ENRICH_WORKERS) as executor:
-        futures = {executor.submit(_enrich_row, row): row for row in rows}
+        futures = {executor.submit(_enrich_row, row, profile): row for row in rows}
         for future in as_completed(futures):
             domain, info = future.result()
             longevity_signals = info.pop("_longevity_signals", [])
@@ -977,5 +992,10 @@ if __name__ == "__main__":
     parser.add_argument("--reaudit", choices=["stale", "all"], default=None,
                         help="Re-audit already-audited leads: 'stale' = those not on the "
                              "current pipeline version (catch-up), 'all' = every matched lead")
+    parser.add_argument("--vertical", default=None,
+                        help="Vertical to audit (e.g. outdoor, construction). "
+                             "Defaults to the VERTICAL env var, or 'outdoor'.")
     args = parser.parse_args()
-    run_enrichment(limit=args.limit, reaudit=args.reaudit)
+    if args.vertical:
+        os.environ["VERTICAL"] = args.vertical
+    run_enrichment(limit=args.limit, reaudit=args.reaudit, profile=get_profile(args.vertical))

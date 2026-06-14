@@ -5,16 +5,20 @@ on:
     - cron: "0 11 * * *"
   workflow_dispatch:
 
-# Shared with Backfill Queue + Lead Audit so the three never run at once
-# (they touch the same matched backlog — overlap = double LLM spend + more throttling).
-concurrency:
-  group: lead-pipeline
-  cancel-in-progress: false
-
 jobs:
   pipeline:
     runs-on: ubuntu-latest
     timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        vertical: [outdoor, construction]
+    # Per-vertical group: each market serializes against its own Backfill + Lead
+    # Audit (they share that market's matched backlog), but the markets run in
+    # parallel and one market failing never fails the other.
+    concurrency:
+      group: lead-pipeline-${{ matrix.vertical }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
@@ -29,7 +33,7 @@ jobs:
         run: python -m playwright install chromium --with-deps
 
       - name: Run domain pipeline
-        run: python run.py --domains-only --domain-source domainsmonitor --keywords --site-limit 200
+        run: python run.py --domains-only --domain-source domainsmonitor --keywords --site-limit 200 --vertical ${{ matrix.vertical }}
         env:
           DOMAIN_DB_PATH: ${{ secrets.TURSO_DB_URL }}
           TURSO_DB_URL: ${{ secrets.TURSO_DB_URL }}

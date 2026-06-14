@@ -52,8 +52,9 @@ function PctCell({ num, den }: { num: number | null | undefined; den: number | n
   );
 }
 
-export default async function ActivityPage() {
-  const runs = await getPipelineRuns(100);
+export default async function ActivityPage({ params }: { params: Promise<{ industry: string }> }) {
+  const { industry } = await params;
+  const runs = await getPipelineRuns(100, industry);
 
   // Aggregate stats over runs that had classification work
   const classifyRuns = runs.filter((r) => (r.siteProcessed ?? 0) > 0);

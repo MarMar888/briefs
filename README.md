@@ -4,6 +4,28 @@ Finds newly emerging outdoor recreation businesses for an outdoor insurance brok
 
 The highest-value signal is newly registered domains: a business that just bought a domain and put up a real site may not have bought commercial insurance yet. The scanner imports newly registered domain lists, filters for outdoor keywords, checks whether the site is live, classifies likely leads, and writes a reviewable CSV with score, location, redirect, phone, and email fields.
 
+## Verticals (one pipeline, many markets)
+
+The same pipeline runs multiple **markets** side by side — currently `outdoor` (the
+original OSI insurance-broker use case) and `construction` (newly-forming contractors as
+sales leads for a Ramp SDR). One shared database holds both; every lead row carries an
+`industry` column so the markets never mix.
+
+- **Selecting a vertical:** the `VERTICAL` env var (default `outdoor`), or `--vertical` on
+  `run.py` / `enricher.py`. The default keeps the original OSI behavior byte-for-byte.
+- **What a profile changes:** the domain keywords, the classify + enrich LLM prompts, the
+  audit rules, and the email/branding label. Everything else (state machine, geo, crawl,
+  scoring scale, dashboard) is shared. Profiles live in **`vertical_profiles.py`** — the
+  per-vertical source of truth (mirrored into `frontend/lib/keywords.ts` for display).
+- **Construction thesis is inverted from OSI.** OSI wants *new* businesses and disqualifies
+  established ones. A Ramp lead just needs ongoing *spend*, so **new *and* established
+  construction businesses both qualify** — the only hard disqualifiers are tiny
+  hobby/side-projects with no real spend and out-of-country/invalid sites. (The longevity
+  signal is still computed and shown on the dashboard; for construction it just never
+  suppresses.)
+- **`not_outdoor`** is a vertical-agnostic "classifier-rejected" bucket — for construction
+  it simply means "not a qualifying construction lead." (Kept as-is to avoid a status migration.)
+
 ## What Counts As A Lead
 
 The classifier targets commercial US businesses in or adjacent to outdoor recreation:
@@ -296,9 +318,10 @@ This is a needle-in-a-haystack scraping problem, so optimize the pipeline for st
 ## Files
 
 ```text
-run.py            Main CLI entry point
+run.py            Main CLI entry point (--vertical selects the market)
+vertical_profiles.py  Per-vertical config: keywords, classify/enrich prompts, audit rules, label
 domain_scanner.py Domain import, keyword filtering, DNS, geo, site phase, queue updates
-domain_store.py   SQLite/Turso schema, migrations, matched_domains view
+domain_store.py   SQLite/Turso schema, migrations, industry column, matched_domains view
 classifier.py     Website fetching, Firecrawl fallback, contact extraction, redirects, OpenRouter classification
 email_alerts.py   Resend digest emails for unalerted matched domains
 frontend/         Next.js review dashboard for Vercel

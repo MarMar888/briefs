@@ -13,8 +13,9 @@ function dateText(value: string | null) {
   return value ? new Date(value).toLocaleDateString() : "-";
 }
 
-export default async function PendingPage() {
-  const domains = await getPendingDomains();
+export default async function PendingPage({ params }: { params: Promise<{ industry: string }> }) {
+  const { industry } = await params;
+  const domains = await getPendingDomains(industry);
 
   return (
     <section className="stack">

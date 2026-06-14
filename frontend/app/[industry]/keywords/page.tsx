@@ -1,10 +1,11 @@
-import { KEYWORD_GROUPS, KEYWORD_COUNT } from "@/lib/keywords";
+import { keywordsFor } from "@/lib/keywords";
 
-export const metadata = {
-  title: "Keywords · Briefs",
-};
+export const dynamic = "force-dynamic";
 
-export default function KeywordsPage() {
+export default async function KeywordsPage({ params }: { params: Promise<{ industry: string }> }) {
+  const { industry } = await params;
+  const { groups, count } = keywordsFor(industry);
+
   return (
     <section className="stack">
       <div className="pageHeader">
@@ -12,14 +13,13 @@ export default function KeywordsPage() {
           <h1>Scan Keywords</h1>
           <p>
             Newly registered domains whose name contains one of these words are pulled into the
-            pipeline for geo-check and scraping. {KEYWORD_COUNT} keywords across{" "}
-            {KEYWORD_GROUPS.length} categories.
+            pipeline for geo-check and scraping. {count} keywords across {groups.length} categories.
           </p>
         </div>
       </div>
 
       <div className="keywordGroups">
-        {KEYWORD_GROUPS.map((group) => (
+        {groups.map((group) => (
           <div key={group.label} className="keywordGroup">
             <h2>
               {group.label}

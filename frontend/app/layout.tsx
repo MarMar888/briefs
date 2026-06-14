@@ -1,30 +1,18 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Briefs",
-  description: "Outdoor sports domain lead review"
+  description: "Domain lead review"
 };
 
+// Minimal shell. The per-tenant header + nav live in app/[industry]/layout.tsx
+// so they can be scoped to the active industry.
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
-      <body>
-        <header className="topbar">
-          <Link className="brand" href="/">
-            Briefs
-          </Link>
-          <nav className="nav">
-            <Link href="/">Leads</Link>
-            <Link href="/pending">Pending</Link>
-            <Link href="/keywords">Keywords</Link>
-            <Link href="/activity">Activity</Link>
-          </nav>
-        </header>
-        <main className="shell">{children}</main>
-      </body>
+      <body>{children}</body>
     </html>
   );
 }

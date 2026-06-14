@@ -25,6 +25,7 @@ export const pipelineRuns = sqliteTable("pipeline_runs", {
   expired: integer("expired"),
   error: text("error"),
   pipelineVersion: text("pipeline_version"),
+  industry: text("industry"),
 });
 
 export type PipelineRun = typeof pipelineRuns.$inferSelect;
@@ -36,6 +37,7 @@ export const domains = sqliteTable("domains", {
   lastSeenAt: text("last_seen_at").notNull(),
   expiresAt: text("expires_at"),
   status: text("status").notNull(),
+  industry: text("industry").notNull().default("outdoor"),
   resolvedIp: text("resolved_ip"),
   countryCode: text("country_code"),
   websiteUrl: text("website_url"),
