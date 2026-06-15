@@ -45,7 +45,7 @@ jobs:
       - name: Enrich matched domains
         run: |
           LIMIT="${{ github.event.inputs.limit || '0' }}"
-          REAUDIT="${{ github.event.inputs.reaudit || 'none' }}"
+          REAUDIT="${{ github.event.inputs.reaudit || 'stale' }}"
           FLAG=""
           [ "$REAUDIT" != "none" ] && FLAG="--reaudit $REAUDIT"
           echo "[enrich] Running enrichment, limit=$LIMIT, reaudit=$REAUDIT, vertical=${{ matrix.vertical }}"

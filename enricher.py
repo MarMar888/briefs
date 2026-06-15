@@ -94,24 +94,42 @@ The broker wants NEW or EARLY-STAGE outdoor businesses and wants to AVOID two th
 
 Read the combined website content below and extract these fields, one per line.
 The content may include an "EXTERNAL SEARCH RESULTS" section with off-site listings
-(directories, social, reviews, news) — use it for age, size, location, and longevity
+(directories, social, reviews, news) — use these for age, size, location, and longevity
 signals the site itself omits, but weigh the business's own site most heavily.
 Use UNKNOWN for anything you genuinely cannot determine from the content. Do not guess.
 
-OWNER_NAME: <first and last name of the owner, founder, or principal contact>
-FULL_ADDRESS: <complete street address with city, state, zip>
-PHONE: <primary phone number>
+OWNER_NAME: <first and last name of the owner, founder, or principal contact. Look for "owner",
+  "founder", "proprietor", "meet our team", bio pages, and email signatures.>
+FULL_ADDRESS: <complete physical street address with city, state, zip. Ignore PO boxes.
+  Look in contact pages, footers, and Google Maps embeds.>
+PHONE: <primary business phone number>
 EMAIL: <primary contact email>
-ESTABLISHED: <year or period the business was founded, e.g. "2024", "since 1998", "over 30 years", "3rd generation">
-ENTITY_TYPE: <legal entity if stated in the content: LLC, Inc, Corporation, LLP, sole proprietor>
-EMPLOYEE_ESTIMATE: <rough team size implied by the content: "1", "2-5", "6-20", "20+">
-LOCATION_COUNT: <how many physical locations / storefronts are mentioned: "1", "2", "3+">
-BUSINESS_SIZE: <exactly one of: solo, small, midsize, large — your best judgment of operating scale>
-SIDE_PROJECT: <YES if this reads like a hobby, passion project, or part-time side venture rather than a
-  full commercial operation. Signs: a single person, no legal entity, no street address, a free email
-  (gmail/yahoo/outlook), very thin or personal "about me" content, no staff, no hours. NO if it presents
-  as a real staffed commercial business.>
-SUMMARY: <one concise sentence describing what the business does and what it sells or offers>
+ESTABLISHED: <when the business was founded — be thorough and look for ALL of these signals:
+  - Explicit year or phrase: "founded in 1998", "since 2003", "est. 1985", "established 2010",
+    "incorporated in 1994", "opened in 2019"
+  - Anniversary or duration language: "celebrating 30 years", "our 25th year", "30th anniversary",
+    "serving X for over 20 years", "in business for 15 years" — calculate the implied founding year
+  - Generational language: "family-owned since 1972", "2nd generation", "our grandfather started this"
+  - Copyright spans in the footer: "© 2003–2026" implies active since 2003 (ignore single current-year
+    copyrights like "© 2026" — those are just date-of-update markers, not founding signals)
+  - Off-site: founding year mentioned in a directory listing, review, or news snippet
+  If you find any of these, report the actual year or phrase (e.g. "since 1998", "~30 years",
+  "3rd generation"). If nothing at all is found, use UNKNOWN.>
+ENTITY_TYPE: <legal entity if stated: LLC, Inc, Corporation, LLP, sole proprietor. Look in footers,
+  about pages, and legal disclaimers.>
+EMPLOYEE_ESTIMATE: <rough team size implied by the content: "1", "2-5", "6-20", "20+".
+  Count named staff, job listings, "our team" pages, and operational scope clues.>
+LOCATION_COUNT: <number of distinct physical locations or storefronts: "1", "2", "3+".
+  Look for multiple addresses, "locations" pages, or franchise/chain language.>
+BUSINESS_SIZE: <exactly one of: solo, small, midsize, large — your best judgment of operating scale
+  based on staff, revenue signals, location count, and overall site depth.>
+SIDE_PROJECT: <YES if this reads like a hobby, passion project, or part-time side venture rather than
+  a real commercial operation. Signs: single person with no staff, no legal entity, no street address,
+  free email (gmail/yahoo/outlook/hotmail), very thin or personal "about me" content, no business hours,
+  no pricing, no transaction infrastructure. NO if it presents as a staffed commercial business with
+  a physical presence, professional contact info, or clear revenue model.>
+SUMMARY: <one concise sentence describing what the business does, what it sells or offers, and
+  where it operates (city/region if clear).>
 
 Website content:
 {content}"""
@@ -209,14 +227,41 @@ def _sitemap_audit_urls(root: str, host: str) -> list[str]:
     return matches
 
 
+_crawl4ai_local = threading.local()
+
+
+def _get_crawl4ai_loop() -> asyncio.AbstractEventLoop:
+    loop = getattr(_crawl4ai_local, "loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _crawl4ai_local.loop = loop
+    return loop
+
+
+async def _get_shared_crawler():
+    """Return the thread-local AsyncWebCrawler, creating and starting it once per thread."""
+    from crawl4ai import AsyncWebCrawler
+    crawler = getattr(_crawl4ai_local, "crawler", None)
+    if crawler is None:
+        crawler = AsyncWebCrawler(verbose=False)
+        await crawler.start()
+        _crawl4ai_local.crawler = crawler
+    return crawler
+
+
 async def _crawl4ai_links_async(url: str) -> list[dict]:
-    from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+    from crawl4ai import CrawlerRunConfig
     config = CrawlerRunConfig(
         excluded_tags=[], remove_overlay_elements=False,
         page_timeout=_PAGE_TIMEOUT_MS, verbose=False,
     )
-    async with AsyncWebCrawler() as crawler:
+    crawler = await _get_shared_crawler()
+    try:
         result = await crawler.arun(url=url, config=config)
+    except Exception:
+        _crawl4ai_local.crawler = None  # reset so the next call gets a fresh crawler
+        raise
     if not result.success:
         return []
     return result.links.get("internal", [])
@@ -230,7 +275,7 @@ def _crawl4ai_discover_links(url: str) -> list[dict]:
 
 
 async def _crawl4ai_fetch_async(url: str, max_chars: int) -> str:
-    from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+    from crawl4ai import CrawlerRunConfig
     from crawl4ai.content_filter_strategy import PruningContentFilter
     from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 
@@ -244,25 +289,17 @@ async def _crawl4ai_fetch_async(url: str, max_chars: int) -> str:
             options={"ignore_links": True},
         ),
     )
-    async with AsyncWebCrawler() as crawler:
+    crawler = await _get_shared_crawler()
+    try:
         result = await crawler.arun(url=url, config=config)
+    except Exception:
+        _crawl4ai_local.crawler = None  # reset so the next call gets a fresh crawler
+        raise
     if not result.success:
         return ""
     md = result.markdown
     text = (md.fit_markdown or md.raw_markdown) if hasattr(md, "fit_markdown") else str(md)
     return re.sub(r"\s+", " ", text).strip()[:max_chars]
-
-
-_crawl4ai_local = threading.local()
-
-
-def _get_crawl4ai_loop() -> asyncio.AbstractEventLoop:
-    loop = getattr(_crawl4ai_local, "loop", None)
-    if loop is None or loop.is_closed():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        _crawl4ai_local.loop = loop
-    return loop
 
 
 def _scrape(url: str, max_chars: int = 3000) -> str:
@@ -605,7 +642,7 @@ def _extract_info(content: str, profile=None) -> dict:
                 model=model,
                 messages=[{"role": "user", "content": profile.enrich_prompt.format(content=content)}],
                 temperature=0,
-                max_tokens=320,
+                max_tokens=800,
             )
             raw = resp.choices[0].message.content or ""
             return _parse_response(raw)
@@ -678,21 +715,6 @@ def _max_duration_years(text: str) -> int:
     return best
 
 
-def _founding_years(content: str, established: str) -> list[int]:
-    current_year = datetime.now().year
-    text = f"{established} {content}"
-    years: set[int] = set()
-    for m in _COPYRIGHT_RE.finditer(text):
-        y = int(m.group(1))
-        if y < current_year:  # current-year copyright is a date-of-update marker, not a founding signal
-            years.add(y)
-    for m in _SINCE_RE.finditer(text):
-        years.add(int(m.group(1)))
-    # bare years inside the explicit established field are trustworthy
-    for m in _YEAR_RE.finditer(established):
-        years.add(int(m.group(1)))
-    return sorted(years)
-
 
 def _assess_longevity(established: str, content: str) -> tuple[str, bool, list[str]]:
     """Return (human-readable longevity label, is_old flag, signal list).
@@ -744,7 +766,7 @@ def _assess_longevity(established: str, content: str) -> tuple[str, bool, list[s
 
     valid_years = sorted(y for y in years if 1900 <= y <= current_year)
     est_low = (established or "").lower()
-    scan = f"{est_low} {content[:5000].lower()}"
+    scan = f"{est_low} {content.lower()}"
 
     # Multi-generation / decades language is a strong "old business" tell.
     if _GENERATION_RE.search(scan):
@@ -889,6 +911,7 @@ def _enrich_row(row: dict, profile=None) -> tuple[str, dict]:
         }
 
     content, html = _fetch_pages(url)
+    scrape_empty = not content.strip()
 
     # Off-site search adds external age/size signals (directories, social, reviews).
     # The LLM sees it; the deterministic checks below do NOT (a stray year in a
@@ -900,6 +923,10 @@ def _enrich_row(row: dict, profile=None) -> tuple[str, dict]:
 
     info = _extract_info(audit_content, profile) if audit_content.strip() else {}
     info = _build_audit(info, content, html, profile)  # deterministic checks on site content only
+
+    if scrape_empty:
+        note = "⚠ scrape returned no content"
+        info["audit_notes"] = f"{note}; {info['audit_notes']}" if info.get("audit_notes") else note
     info["enriched_at"] = utcnow().isoformat()
     info["enriched_version"] = get_version()
 
