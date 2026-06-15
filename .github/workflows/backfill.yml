@@ -15,15 +15,19 @@ on:
         required: false
         default: "0"
 
-# Shared with Live Ingest Loop + Lead Audit so the three never run at once.
-concurrency:
-  group: lead-pipeline
-  cancel-in-progress: false
-
 jobs:
   backfill:
     runs-on: ubuntu-latest
     timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        vertical: [outdoor, construction]
+    # Per-vertical group so each market's backfill serializes only against its own
+    # Live Ingest + Lead Audit; the two markets drain their queues in parallel.
+    concurrency:
+      group: lead-pipeline-${{ matrix.vertical }}
+      cancel-in-progress: false
 
     steps:
       - uses: actions/checkout@v4
@@ -49,7 +53,8 @@ jobs:
             --domain-source domainsmonitor-file \
             --keywords \
             --geo-limit "$GEO_LIMIT" \
-            --site-limit "$LIMIT"
+            --site-limit "$LIMIT" \
+            --vertical ${{ matrix.vertical }}
         env:
           DOMAIN_DB_PATH: ${{ secrets.TURSO_DB_URL }}
           TURSO_DB_URL: ${{ secrets.TURSO_DB_URL }}

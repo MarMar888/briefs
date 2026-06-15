@@ -14,6 +14,7 @@ from fetcher import fetch_new_filings
 from discoverer import find_website
 from classifier import classify, classify_domain
 from digest import Result, to_csv, to_text
+from vertical_profiles import get_profile
 
 
 def main():
@@ -55,6 +56,10 @@ def main():
                         help="Max new/geo_pending domains to geo-check per run (0 = no limit)")
     parser.add_argument("--rescrape-days", type=int, default=30,
                         help="Days between rescrapes of already-classified domains (default: 30)")
+    parser.add_argument("--vertical", default=None,
+                        help="Market vertical to run (e.g. outdoor, construction). Selects the "
+                             "keywords/prompts/audit rules and the industry stamped on every row. "
+                             "Defaults to the VERTICAL env var, or 'outdoor' (OSI).")
     args = parser.parse_args()
 
     if args.domain_file:
@@ -67,6 +72,13 @@ def main():
 
     if args.keyword_workers == 0:
         args.keyword_workers = max(1, min((os.cpu_count() or 2) - 1, 8)) if args.domain_file else 1
+
+    # Resolve the active vertical once and keep the env var in sync so any module
+    # that reads VERTICAL directly (e.g. a ProcessPoolExecutor child) agrees.
+    if args.vertical:
+        os.environ["VERTICAL"] = args.vertical
+    profile = get_profile(args.vertical)
+    print(f"[run] Vertical: {profile.name} ({profile.label})")
 
     filings = []
 
@@ -82,7 +94,7 @@ def main():
         from email_alerts import send_match_alerts
 
         domain_store.init_db()
-        run_id = domain_store.start_run(source=args.domain_source)
+        run_id = domain_store.start_run(source=args.domain_source, industry=profile.name)
         print(f"[run] Scanning newly registered domains from {args.domain_source} (last {args.days} days, limit {args.domain_limit})...")
         try:
             domain_filings, scan_stats = scan_new_domains(
@@ -100,6 +112,7 @@ def main():
                 site_limit=args.site_limit,
                 geo_limit=args.geo_limit,
                 rescrape_days=args.rescrape_days,
+                profile=profile,
             )
             domain_store.finish_run(run_id, **scan_stats)
         except Exception as exc:
@@ -117,10 +130,10 @@ def main():
         from enricher import run_enrichment
         inline_audit_limit = int(os.environ.get("INLINE_AUDIT_LIMIT", "200"))
         print(f"[run] Running deep-search audit on newly matched leads (limit {inline_audit_limit})...")
-        run_enrichment(limit=inline_audit_limit)
+        run_enrichment(limit=inline_audit_limit, profile=profile)
 
-        unalerted = domain_store.get_unalerted_matches()
-        if unalerted and send_match_alerts(unalerted):
+        unalerted = domain_store.get_unalerted_matches(industry=profile.name)
+        if unalerted and send_match_alerts(unalerted, profile=profile):
             domain_store.mark_alert_sent([match["domain"] for match in unalerted])
 
     results = []

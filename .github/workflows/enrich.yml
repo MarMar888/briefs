@@ -15,15 +15,19 @@ on:
         required: false
         default: "none"
 
-# Shared with Live Ingest Loop + Backfill Queue so the three never run at once.
-concurrency:
-  group: lead-pipeline
-  cancel-in-progress: false
-
 jobs:
   enrich:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        vertical: [outdoor, construction]
+    # Per-vertical group so each market's audit serializes only against its own
+    # Live Ingest + Backfill; the two markets audit in parallel.
+    concurrency:
+      group: lead-pipeline-${{ matrix.vertical }}
+      cancel-in-progress: false
 
     steps:
       - uses: actions/checkout@v4
@@ -44,8 +48,8 @@ jobs:
           REAUDIT="${{ github.event.inputs.reaudit || 'stale' }}"
           FLAG=""
           [ "$REAUDIT" != "none" ] && FLAG="--reaudit $REAUDIT"
-          echo "[enrich] Running enrichment, limit=$LIMIT, reaudit=$REAUDIT"
-          python enricher.py --limit "$LIMIT" $FLAG
+          echo "[enrich] Running enrichment, limit=$LIMIT, reaudit=$REAUDIT, vertical=${{ matrix.vertical }}"
+          python enricher.py --limit "$LIMIT" $FLAG --vertical ${{ matrix.vertical }}
         env:
           DOMAIN_DB_PATH: ${{ secrets.TURSO_DB_URL }}
           TURSO_DB_URL: ${{ secrets.TURSO_DB_URL }}

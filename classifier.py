@@ -13,6 +13,8 @@ import requests
 from openai import OpenAI
 from bs4 import BeautifulSoup
 
+from vertical_profiles import get_profile
+
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 OPENROUTER_MODEL   = os.environ.get("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct")
@@ -512,6 +514,15 @@ def _reason_contradicts_match(reason: str) -> bool:
             "outside the defined",
             "too sparse to determine",
             "content is too sparse",
+            # LLM recognized it's not a real business but hedged on score
+            # (e.g. industry-themed tools/calculators/directories/blogs).
+            "lack of clarity on whether",
+            "collection of calculator",
+            "rather than a real",
+            "not a real business",
+            "not a real company",
+            "no information on the business",
+            "no information about the business",
         )
     )
 
@@ -548,9 +559,11 @@ def _has_us_signal(location: str, content: str) -> bool:
     return bool(re.search(r"\b\d{3,6}\s+[A-Za-z0-9 .'-]+,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?\b", content))
 
 
-def classify_domain(domain: str, content: str) -> dict:
-    """Classify a domain as an outdoor retailer from pre-fetched page content."""
-    prompt = DOMAIN_CLASSIFY_PROMPT.format(domain=domain, content=content or "No content available")
+def classify_domain(domain: str, content: str, profile=None) -> dict:
+    """Classify a domain from pre-fetched page content, per the active vertical."""
+    if profile is None:
+        profile = get_profile()
+    prompt = profile.classify_prompt.format(domain=domain, content=content or "No content available")
 
     response = _call_llm(prompt, domain)
     if not response:
@@ -583,7 +596,10 @@ def classify_domain(domain: str, content: str) -> dict:
     if is_template and score >= 60:
         score = min(score, 45)
         reason = "Template/starter website with no real business-specific evidence yet"
-    elif _established_is_too_old(established) and score >= 60:
+    elif profile.cap_established_in_classifier and _established_is_too_old(established) and score >= 60:
+        # Outdoor only: an established business is a weak "new/early-stage" lead.
+        # Construction (cap_established_in_classifier=False) skips this — an
+        # established contractor still has ongoing spend, so it stays a strong lead.
         score = min(score, 45)
         reason = f"Established business or organization ({established}), not a new/early-stage lead"
     elif _mentions_non_us_location(location, reason) and score >= 60:

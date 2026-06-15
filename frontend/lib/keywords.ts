@@ -1,8 +1,8 @@
-// Mirror of OUTDOOR_KEYWORDS in domain_scanner.py, grouped by category for display.
+// Per-vertical keyword sets, grouped by category for display on the /keywords page.
 //
-// SOURCE OF TRUTH: domain_scanner.py (the scanner actually runs off that set).
-// This file exists only to render the list on the website — keep the two in sync
-// when keywords are added or removed.
+// SOURCE OF TRUTH: vertical_profiles.py (the scanner runs off the OUTDOOR / CONSTRUCTION
+// keyword sets defined there; outdoor lives as OUTDOOR_KEYWORDS in domain_scanner.py).
+// This file only renders the lists on the website — keep them in sync when keywords change.
 
 export type KeywordGroup = {
   label: string;
@@ -121,3 +121,46 @@ export const KEYWORD_GROUPS: KeywordGroup[] = [
 ];
 
 export const KEYWORD_COUNT = KEYWORD_GROUPS.reduce((sum, g) => sum + g.words.length, 0);
+
+// Mirror of CONSTRUCTION_KEYWORDS in vertical_profiles.py.
+export const CONSTRUCTION_KEYWORD_GROUPS: KeywordGroup[] = [
+  {
+    label: "General / GC / builders",
+    words: ["construction", "constructions", "contractor", "contractors", "contracting", "builder", "builders", "building", "build", "homebuilder", "homebuilders", "homebuilding", "designbuild", "generalcontractor", "gc"],
+  },
+  {
+    label: "Roofing / exterior",
+    words: ["roofing", "roofer", "roofers", "roof", "siding", "gutters", "gutter", "waterproofing"],
+  },
+  {
+    label: "Concrete / masonry / structural / site",
+    words: ["concrete", "masonry", "mason", "masons", "brick", "bricklayer", "framing", "framer", "framers", "foundation", "foundations", "excavation", "excavating", "excavator", "excavators", "earthwork", "grading", "demolition", "demo", "paving", "paver", "pavers", "asphalt", "septic"],
+  },
+  {
+    label: "Finishing trades",
+    words: ["drywall", "sheetrock", "plaster", "plastering", "flooring", "floors", "tile", "tiling", "painting", "painter", "painters", "insulation", "windows", "doors", "cabinet", "cabinets", "cabinetry", "decking", "decks", "fencing", "fence", "fences"],
+  },
+  {
+    label: "Mechanical / MEP",
+    words: ["plumbing", "plumber", "plumbers", "electrical", "electric", "electrician", "electricians", "hvac", "heating", "cooling", "airconditioning", "mechanical"],
+  },
+  {
+    label: "Remodeling / renovation",
+    words: ["remodeling", "remodel", "remodeler", "remodelers", "renovation", "renovations", "renovating"],
+  },
+  {
+    label: "Landscaping / hardscaping / site work",
+    words: ["landscaping", "landscaper", "landscapers", "hardscaping", "hardscape", "hardscapes", "sitework"],
+  },
+];
+
+export const CONSTRUCTION_KEYWORD_COUNT = CONSTRUCTION_KEYWORD_GROUPS.reduce((sum, g) => sum + g.words.length, 0);
+
+export const KEYWORDS_BY_INDUSTRY: Record<string, { groups: KeywordGroup[]; count: number }> = {
+  outdoor: { groups: KEYWORD_GROUPS, count: KEYWORD_COUNT },
+  construction: { groups: CONSTRUCTION_KEYWORD_GROUPS, count: CONSTRUCTION_KEYWORD_COUNT },
+};
+
+export function keywordsFor(industry: string) {
+  return KEYWORDS_BY_INDUSTRY[industry] ?? KEYWORDS_BY_INDUSTRY.outdoor;
+}
