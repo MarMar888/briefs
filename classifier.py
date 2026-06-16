@@ -162,7 +162,10 @@ def _detect_cross_domain_redirect(url: str) -> str:
 
 
 
-async def _crawl4ai_fetch_async(url: str, max_chars: int) -> str:
+import threading as _threading
+
+
+async def _crawl4ai_fetch_async(url: str, max_chars: int, page_timeout_ms: int) -> str:
     from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
     from crawl4ai.content_filter_strategy import PruningContentFilter
     from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
@@ -170,7 +173,7 @@ async def _crawl4ai_fetch_async(url: str, max_chars: int) -> str:
     config = CrawlerRunConfig(
         excluded_tags=["nav", "footer", "aside"],
         remove_overlay_elements=True,
-        page_timeout=int(os.environ.get("ENRICH_PAGE_TIMEOUT_MS", "20000")),
+        page_timeout=page_timeout_ms,
         verbose=False,
         markdown_generator=DefaultMarkdownGenerator(
             content_filter=PruningContentFilter(threshold=0.48, threshold_type="fixed"),
@@ -178,7 +181,10 @@ async def _crawl4ai_fetch_async(url: str, max_chars: int) -> str:
         ),
     )
     async with AsyncWebCrawler() as crawler:
-        result = await crawler.arun(url=url, config=config)
+        result = await asyncio.wait_for(
+            crawler.arun(url=url, config=config),
+            timeout=page_timeout_ms / 1000 + 10,
+        )
     if not result.success:
         return ""
     md = result.markdown
@@ -186,26 +192,36 @@ async def _crawl4ai_fetch_async(url: str, max_chars: int) -> str:
     return re.sub(r"\s+", " ", text).strip()[:max_chars]
 
 
-import threading as _threading
-_crawl4ai_local = _threading.local()
-
-
-def _get_crawl4ai_loop() -> asyncio.AbstractEventLoop:
-    loop = getattr(_crawl4ai_local, "loop", None)
-    if loop is None or loop.is_closed():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        _crawl4ai_local.loop = loop
-    return loop
-
-
 def _fetch_via_crawl4ai(url: str, max_chars: int = 3000) -> str:
-    """Fetch a JavaScript-rendered page via Crawl4AI (local Playwright browser)."""
-    try:
-        return _get_crawl4ai_loop().run_until_complete(_crawl4ai_fetch_async(url, max_chars))
-    except Exception as e:
-        print(f"[classifier] Crawl4AI scrape failed for {url}: {e}", flush=True)
+    """Fetch a JavaScript-rendered page via Crawl4AI (local Playwright browser).
+
+    Runs the async crawl in a daemon thread so a hung browser startup never
+    blocks the caller indefinitely.
+    """
+    page_timeout_ms = int(os.environ.get("ENRICH_PAGE_TIMEOUT_MS", "20000"))
+    # Allow page_timeout + 30s for browser startup and teardown overhead.
+    outer_timeout = page_timeout_ms / 1000 + 30
+
+    result: list[str] = []
+    error: list[Exception] = []
+
+    def _worker():
+        try:
+            result.append(asyncio.run(_crawl4ai_fetch_async(url, max_chars, page_timeout_ms)))
+        except Exception as e:
+            error.append(e)
+
+    t = _threading.Thread(target=_worker, daemon=True)
+    t.start()
+    t.join(timeout=outer_timeout)
+
+    if t.is_alive():
+        print(f"[classifier] Crawl4AI timed out after {outer_timeout:.0f}s for {url}", flush=True)
         return ""
+    if error:
+        print(f"[classifier] Crawl4AI scrape failed for {url}: {error[0]}", flush=True)
+        return ""
+    return result[0] if result else ""
 
 
 def _fetch_via_firecrawl(url: str, max_chars: int = 3000) -> str:
