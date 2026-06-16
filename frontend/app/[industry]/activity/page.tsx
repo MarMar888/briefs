@@ -1,4 +1,4 @@
-import { getPipelineRuns } from "@/lib/queries";
+import { getPipelineInventory, getPipelineRuns } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -54,7 +54,10 @@ function PctCell({ num, den }: { num: number | null | undefined; den: number | n
 
 export default async function ActivityPage({ params }: { params: Promise<{ industry: string }> }) {
   const { industry } = await params;
-  const runs = await getPipelineRuns(100, industry);
+  const [runs, inventory] = await Promise.all([
+    getPipelineRuns(100, industry),
+    getPipelineInventory(industry),
+  ]);
 
   // Aggregate stats over runs that had classification work
   const classifyRuns = runs.filter((r) => (r.siteProcessed ?? 0) > 0);
@@ -88,6 +91,20 @@ export default async function ActivityPage({ params }: { params: Promise<{ indus
         <div>
           <h1>Pipeline Activity</h1>
           <p>Sourcing quality and run history.</p>
+        </div>
+      </div>
+
+      {/* Pipeline inventory */}
+      <div>
+        <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--faint)", marginBottom: 10 }}>
+          Pipeline inventory
+        </div>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <InventoryCard label="In queue" value={((inventory.statusMap["geo_pending"] ?? 0) + (inventory.statusMap["site_pending"] ?? 0)).toLocaleString()} sub="geo + site pending" color="var(--amber)" />
+          <InventoryCard label="Matched" value={(inventory.statusMap["matched"] ?? 0).toLocaleString()} sub="total leads" color="var(--green)" />
+          <InventoryCard label="Strong Match" value={(inventory.categoryMap["Strong Match"] ?? 0).toLocaleString()} sub="score 90–100" color="var(--green)" />
+          <InventoryCard label="Likely Match" value={(inventory.categoryMap["Likely Match"] ?? 0).toLocaleString()} sub="score 70–89" color="var(--blue)" />
+          <InventoryCard label="Filtered out" value={((inventory.statusMap["non_us"] ?? 0) + (inventory.statusMap["not_outdoor"] ?? 0) + (inventory.statusMap["not_construction"] ?? 0)).toLocaleString()} sub="non-US + no match" color="var(--muted)" />
         </div>
       </div>
 
@@ -155,6 +172,22 @@ export default async function ActivityPage({ params }: { params: Promise<{ indus
         </table>
       </div>
     </section>
+  );
+}
+
+function InventoryCard({ label, value, sub, color }: { label: string; value: string; sub: string; color: string }) {
+  return (
+    <div style={{
+      background: "var(--panel)",
+      border: "1px solid var(--line)",
+      borderRadius: 8,
+      padding: "12px 16px",
+      minWidth: 130,
+    }}>
+      <div style={{ fontSize: 11, color: "var(--faint)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 26, fontWeight: 700, lineHeight: 1, color }}>{value}</div>
+      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>{sub}</div>
+    </div>
   );
 }
 
