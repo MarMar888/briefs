@@ -1,3 +1,4 @@
+[![Backfill Queue](https://github.com/MarMar888/briefs/actions/workflows/backfill.yml/badge.svg)](https://github.com/MarMar888/briefs/actions/workflows/backfill.yml)
 # Outdoor Sports Lead Monitor
 
 Finds newly emerging outdoor recreation businesses for an outdoor insurance broker.
