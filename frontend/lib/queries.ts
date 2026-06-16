@@ -101,6 +101,28 @@ export async function getPendingDomains(industry?: string) {
     .limit(500);
 }
 
+export async function getPipelineInventory(industry?: string) {
+  const db = getDb();
+  const industryClause = industry ? eq(domains.industry, industry) : undefined;
+
+  const statusRows = await db
+    .select({ status: domains.status, count: count() })
+    .from(domains)
+    .where(industryClause)
+    .groupBy(domains.status);
+
+  const categoryRows = await db
+    .select({ scoreCategory: domains.scoreCategory, count: count() })
+    .from(domains)
+    .where(and(eq(domains.status, "matched"), industryClause))
+    .groupBy(domains.scoreCategory);
+
+  const statusMap = Object.fromEntries(statusRows.map((r) => [r.status, Number(r.count)]));
+  const categoryMap = Object.fromEntries(categoryRows.map((r) => [r.scoreCategory ?? "Unknown", Number(r.count)]));
+
+  return { statusMap, categoryMap };
+}
+
 export async function getPipelineRuns(limit = 100, industry?: string) {
   return getDb()
     .select()
