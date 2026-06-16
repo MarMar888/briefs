@@ -227,55 +227,44 @@ def _sitemap_audit_urls(root: str, host: str) -> list[str]:
     return matches
 
 
-_crawl4ai_local = threading.local()
-
-
-def _get_crawl4ai_loop() -> asyncio.AbstractEventLoop:
-    loop = getattr(_crawl4ai_local, "loop", None)
-    if loop is None or loop.is_closed():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        _crawl4ai_local.loop = loop
-    return loop
-
-
-async def _get_shared_crawler():
-    """Return the thread-local AsyncWebCrawler, creating and starting it once per thread."""
-    from crawl4ai import AsyncWebCrawler
-    crawler = getattr(_crawl4ai_local, "crawler", None)
-    if crawler is None:
-        crawler = AsyncWebCrawler(verbose=False)
-        await crawler.start()
-        _crawl4ai_local.crawler = crawler
-    return crawler
-
-
 async def _crawl4ai_links_async(url: str) -> list[dict]:
-    from crawl4ai import CrawlerRunConfig
+    from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
     config = CrawlerRunConfig(
         excluded_tags=[], remove_overlay_elements=False,
         page_timeout=_PAGE_TIMEOUT_MS, verbose=False,
     )
-    crawler = await _get_shared_crawler()
-    try:
-        result = await crawler.arun(url=url, config=config)
-    except Exception:
-        _crawl4ai_local.crawler = None  # reset so the next call gets a fresh crawler
-        raise
+    async with AsyncWebCrawler(verbose=False) as crawler:
+        result = await asyncio.wait_for(
+            crawler.arun(url=url, config=config),
+            timeout=_PAGE_TIMEOUT_MS / 1000 + 10,
+        )
     if not result.success:
         return []
     return result.links.get("internal", [])
 
 
 def _crawl4ai_discover_links(url: str) -> list[dict]:
-    try:
-        return _get_crawl4ai_loop().run_until_complete(_crawl4ai_links_async(url))
-    except Exception:
+    outer_timeout = _PAGE_TIMEOUT_MS / 1000 + 30
+    result: list[list] = [[]]
+    error: list[Exception] = []
+
+    def _worker():
+        try:
+            result[0] = asyncio.run(_crawl4ai_links_async(url))
+        except Exception as e:
+            error.append(e)
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    t.join(timeout=outer_timeout)
+    if t.is_alive():
+        print(f"[enricher] Crawl4AI link-discovery timed out after {outer_timeout:.0f}s for {url}", flush=True)
         return []
+    return result[0] if not error else []
 
 
 async def _crawl4ai_fetch_async(url: str, max_chars: int) -> str:
-    from crawl4ai import CrawlerRunConfig
+    from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
     from crawl4ai.content_filter_strategy import PruningContentFilter
     from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 
@@ -289,12 +278,11 @@ async def _crawl4ai_fetch_async(url: str, max_chars: int) -> str:
             options={"ignore_links": True},
         ),
     )
-    crawler = await _get_shared_crawler()
-    try:
-        result = await crawler.arun(url=url, config=config)
-    except Exception:
-        _crawl4ai_local.crawler = None  # reset so the next call gets a fresh crawler
-        raise
+    async with AsyncWebCrawler(verbose=False) as crawler:
+        result = await asyncio.wait_for(
+            crawler.arun(url=url, config=config),
+            timeout=_PAGE_TIMEOUT_MS / 1000 + 10,
+        )
     if not result.success:
         return ""
     md = result.markdown
@@ -303,12 +291,31 @@ async def _crawl4ai_fetch_async(url: str, max_chars: int) -> str:
 
 
 def _scrape(url: str, max_chars: int = 3000) -> str:
-    """Scrape a URL via Crawl4AI. Switch body to _firecrawl() to restore Firecrawl."""
-    try:
-        return _get_crawl4ai_loop().run_until_complete(_crawl4ai_fetch_async(url, max_chars))
-    except Exception as e:
-        print(f"[enricher] Crawl4AI scrape failed for {url}: {e}", flush=True)
+    """Scrape a URL via Crawl4AI with a hard wall-clock timeout.
+
+    Runs in a daemon thread so a hung browser startup never blocks the caller.
+    """
+    outer_timeout = _PAGE_TIMEOUT_MS / 1000 + 30
+    result: list[str] = []
+    error: list[Exception] = []
+
+    def _worker():
+        try:
+            result.append(asyncio.run(_crawl4ai_fetch_async(url, max_chars)))
+        except Exception as e:
+            error.append(e)
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    t.join(timeout=outer_timeout)
+
+    if t.is_alive():
+        print(f"[enricher] Crawl4AI timed out after {outer_timeout:.0f}s for {url}", flush=True)
         return ""
+    if error:
+        print(f"[enricher] Crawl4AI scrape failed for {url}: {error[0]}", flush=True)
+        return ""
+    return result[0] if result else ""
 
 
 def _firecrawl(url: str, max_chars: int = 3000) -> str:

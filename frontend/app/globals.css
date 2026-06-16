@@ -602,6 +602,11 @@ small.muted {
   color: var(--red);
 }
 
+.status.cancelled {
+  background: var(--muted-soft, color-mix(in srgb, var(--muted) 15%, transparent));
+  color: var(--muted);
+}
+
 .activityTable td,
 .activityTable th {
   white-space: nowrap;

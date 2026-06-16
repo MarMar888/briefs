@@ -15,8 +15,8 @@ function formatSource(source: string | null) {
   return SOURCE_LABELS[source] ?? source;
 }
 
-function formatDuration(startedAt: string, finishedAt: string | null) {
-  if (!finishedAt) return "Running…";
+function formatDuration(startedAt: string, finishedAt: string | null, status?: string | null) {
+  if (!finishedAt) return status === "cancelled" ? "Cancelled" : "Running…";
   const ms = new Date(finishedAt).getTime() - new Date(startedAt).getTime();
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s}s`;
@@ -134,7 +134,7 @@ export default async function ActivityPage({ params }: { params: Promise<{ indus
               <tr key={run.id}>
                 <td>{formatDate(run.startedAt)}</td>
                 <td>{formatSource(run.source)}</td>
-                <td>{formatDuration(run.startedAt, run.finishedAt)}</td>
+                <td>{formatDuration(run.startedAt, run.finishedAt, run.status)}</td>
                 <td>{run.downloaded ?? "—"}</td>
                 <td>{run.inserted ?? "—"}</td>
                 <td>{run.siteProcessed ?? "—"}</td>
