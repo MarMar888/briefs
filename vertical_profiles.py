@@ -123,17 +123,19 @@ Lead quality gate:
 
 Important: established age is NOT a disqualifier here. A contractor "serving since 1985" or "family owned for 3 generations" is a perfectly good lead — score on operating scale and spend, not on novelty.
 
-A lead only scores 70 or above if the content shows a REAL OPERATING COMPANY that performs construction work — an identifiable contractor doing services or projects, with contact or location details. Construction-themed tools, calculators, directories, and content/blog sites never reach 70, no matter how relevant the topic.
+A lead only scores 70 or above if the content shows a company whose business is to build or construct things — a contractor, GC, or trade company whose output is completed structures or improvements. Companies that sell products or services TO the construction industry (software, tools, SaaS, consulting, directories) never reach 70, no matter how construction-focused their branding.
 
 Domain: {domain}
 Website content: {content}
 
+The critical distinction: does this company directly contribute to something getting BUILT — even as a GC managing subcontractors — or does it sell products/services TO the construction industry? A real construction company's output is a completed structure, renovation, or physical improvement. A software platform, SaaS tool, directory, or consulting firm whose customers are contractors is NOT a construction company, no matter how construction-focused its branding is.
+
 Score the lead from 0-100 using this scale:
-  90-100: Clear match — a real US construction business with evident crews / equipment / projects / spend.
-  70-89:  Likely match — fits a construction trade but some detail is thin (sparse content, unclear scale or location).
-  50-69:  Borderline — construction-adjacent but a key qualifier is uncertain (could be solo, could be a supplier, scale unclear).
-  25-49:  Weak — construction-themed name but no real operating business shown, or a tiny solo / handyman operation.
-  0-24:   No match — not an actual contractor: a tool / calculator / app / SaaS, a directory or blog/content site, parked / template, non-US, or otherwise not a real construction company.
+  90-100: Strong match — a company whose output is built or constructed things, with solid supporting evidence: named services or project types, a service area or location, and at minimum a phone or email. A real contractor website with services, location, and contact easily reaches 90.
+  70-89:  Likely match — the company clearly exists to build or construct things (a GC, trade contractor, or remodeler), but the site is sparse: basic service list and contact info present, but little project detail or scale evidence.
+  50-69:  Borderline — may be a real construction company but key evidence is missing or ambiguous: trade unclear, could be solo handyman, supplier, or hard to confirm field operations.
+  25-49:  Weak — construction-themed but no real operating company shown: a one-person side-gig, no company identity, no crew, or content too thin to confirm.
+  0-24:   No match — not a company that builds things: software, SaaS, apps, tools, calculators, directories, blogs, marketing/lead-gen firms, restoration/remediation, real estate, pure ecommerce materials, non-US, parked, or template sites.
 
 Answer with exactly this format:
 SCORE: 0-100
