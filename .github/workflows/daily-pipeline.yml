@@ -13,11 +13,12 @@ jobs:
       fail-fast: false
       matrix:
         vertical: [outdoor, construction]
-    # Per-vertical group: each market serializes against its own Backfill + Lead
-    # Audit (they share that market's matched backlog), but the markets run in
-    # parallel and one market failing never fails the other.
+    # Per-vertical group: Live Ingest serializes against Backfill (both do
+    # geo+site scanning on the same queue), but not Lead Audit (enrichment-only,
+    # reads a different slice of the DB and doesn't conflict with scanning).
+    # The two markets scan in parallel and one failing never fails the other.
     concurrency:
-      group: lead-pipeline-${{ matrix.vertical }}
+      group: scan-${{ matrix.vertical }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -33,18 +34,16 @@ jobs:
         run: python -m playwright install chromium --with-deps
 
       - name: Run domain pipeline
-        run: python run.py --domains-only --domain-source domainsmonitor --keywords --site-limit 200 --vertical ${{ matrix.vertical }}
+        run: python run.py --domains-only --domain-source domainsmonitor --keywords --geo-limit 2000 --site-limit 200 --vertical ${{ matrix.vertical }}
         env:
           DOMAIN_DB_PATH: ${{ secrets.TURSO_DB_URL }}
           TURSO_DB_URL: ${{ secrets.TURSO_DB_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           DOMAINS_MONITOR_TOKEN: ${{ secrets.DOMAINS_MONITOR_TOKEN }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
           ALERT_FROM: ${{ secrets.ALERT_FROM }}
-          FIRECRAWL_TIMEOUT_SECONDS: "15"
           # Optional off-site search for the deep-search audit (no-ops if unset)
           BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
           SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
