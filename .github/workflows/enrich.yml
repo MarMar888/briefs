@@ -23,10 +23,12 @@ jobs:
       fail-fast: false
       matrix:
         vertical: [outdoor, construction]
-    # Per-vertical group so each market's audit serializes only against its own
-    # Live Ingest + Backfill; the two markets audit in parallel.
+    # Per-vertical group so each market's audit serializes only against itself
+    # (prevents two enrich runs stacking up for the same vertical). Runs independently
+    # of scan-$vertical (Live Ingest + Backfill) — enrichment reads matched leads,
+    # which don't conflict with geo/site scanning.
     concurrency:
-      group: lead-pipeline-${{ matrix.vertical }}
+      group: lead-audit-${{ matrix.vertical }}
       cancel-in-progress: false
 
     steps:
@@ -54,8 +56,6 @@ jobs:
           DOMAIN_DB_PATH: ${{ secrets.TURSO_DB_URL }}
           TURSO_DB_URL: ${{ secrets.TURSO_DB_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
-          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
-          FIRECRAWL_TIMEOUT_SECONDS: "15"
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           # Optional off-site search (no-ops if unset)
           BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
