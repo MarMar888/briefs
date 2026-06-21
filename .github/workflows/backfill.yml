@@ -1,9 +1,9 @@
 name: Backfill Queue
 
 on:
-  schedule:
-    # Runs every 4 hours — chips through geo + site_pending queue until empty
-    - cron: "0 */4 * * *"
+  # schedule:
+  #   # Runs every 4 hours — chips through geo + site_pending queue until empty
+  #   - cron: "0 */4 * * *"
   workflow_dispatch:
     inputs:
       site_limit:

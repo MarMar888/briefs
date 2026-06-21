@@ -1,9 +1,9 @@
 name: Lead Audit
 
 on:
-  schedule:
-    # Runs at 12 PM UTC daily (6 AM CST) — 1 hour after the daily pipeline
-    - cron: "0 12 * * *"
+  # schedule:
+  #   # Runs at 12 PM UTC daily (6 AM CST) — 1 hour after the daily pipeline
+  #   - cron: "0 12 * * *"
   workflow_dispatch:
     inputs:
       limit:
