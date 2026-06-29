@@ -34,8 +34,9 @@ from datetime import datetime, timedelta
 import wordninja
 import requests
 import domain_store
-from classifier import validate_site, classify_domain
+from classifier import validate_site, classify_domain, _fetch_contact_text
 from fetcher import Filing
+from geo_gate import extract_basics, find_service_area_zips, metro_phone, mn_signal
 from timeutil import utcnow
 from version import get_version
 from vertical_profiles import get_profile
@@ -51,7 +52,7 @@ GEO_BATCH_SLEEP_SECONDS = float(os.environ.get("GEO_BATCH_SLEEP_SECONDS", "1.5")
 GEO_BATCH_RETRIES = int(os.environ.get("GEO_BATCH_RETRIES", "3"))
 GEO_RETRY_SLEEP_SECONDS = float(os.environ.get("GEO_RETRY_SLEEP_SECONDS", "5"))
 GEO_PROGRESS_INTERVAL = 25
-SITE_WORKERS = 8
+SITE_WORKERS = int(os.environ.get("SITE_WORKERS", "8"))
 KEYWORD_BATCH_SIZE = 25000
 DOMAIN_RE = re.compile(r"^(?:https?://)?(?:www\.)?([a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+)", re.I)
 
@@ -715,7 +716,7 @@ def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter:
                             "last_checked_at": now, "attempt_count": count})
             continue
 
-        if country != "US":
+        if country not in profile.geo_allowed_countries:
             geo_non_us += 1
             updates.append({"domain": domain, "status": "non_us", "resolved_ip": ip,
                             "country_code": country, "last_checked_at": now, "attempt_count": count})
@@ -723,7 +724,7 @@ def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter:
             geo_us += 1
             next_check = (utcnow() + timedelta(days=defer_site_days)).isoformat() if defer_site_days else None
             updates.append({"domain": domain, "status": "site_pending", "resolved_ip": ip,
-                            "country_code": "US", "website_url": f"https://{domain}",
+                            "country_code": country, "website_url": f"https://{domain}",
                             "next_check_at": next_check, "last_checked_at": now, "attempt_count": count})
 
     domain_store.batch_update_domains(updates)
@@ -737,6 +738,10 @@ def _check_domain(row: dict, profile=None) -> dict:
     domain = row["domain"]
     url = row["website_url"] or f"https://{domain}"
     site = validate_site(url)
+    content = site.get("content", "")
+    # Cheap, regex-only "basics" stored on EVERY crawled row (matched or rejected) to
+    # build a dataset. No LLM, no extra fetch. Recomputed below if a contact page is read.
+    basics = extract_basics(content, site)
     if site["pending_reason"]:
         return {
             "row": row,
@@ -746,6 +751,7 @@ def _check_domain(row: dict, profile=None) -> dict:
             "redirect_domain": site.get("redirect_domain", ""),
             "phone": site.get("phone", ""),
             "email": site.get("email", ""),
+            "basics": basics,
         }
     if site.get("redirect_domain"):
         # The NRD redirects to a different domain — it's not a genuine new-business
@@ -758,13 +764,38 @@ def _check_domain(row: dict, profile=None) -> dict:
             "redirect_domain": site.get("redirect_domain", ""),
             "phone": site.get("phone", ""), "email": site.get("email", ""),
         }
-        return {"row": row, "url": url, "pending_reason": None, "verdict": verdict}
-    verdict = classify_domain(domain, site["content"], profile)
+        return {"row": row, "url": url, "pending_reason": None, "verdict": verdict, "basics": basics}
+
+    # Content geo gate (minnesota): only domains carrying a service-area ZIP (core) or a
+    # Twin Cities metro phone (adjacent) reach the LLM. Everything else is a cheap reject
+    # with no LLM call. A bounded Tier-1 contact-page fetch runs only when the homepage
+    # already shows a precise MN signal.
+    if profile.require_content_geo_gate:
+        zips = find_service_area_zips(content, profile.service_areas)
+        passed = bool(zips) or metro_phone(content)
+        if not passed and mn_signal(content):
+            combined = content + "\n" + _fetch_contact_text(url)
+            zips = find_service_area_zips(combined, profile.service_areas)
+            passed = bool(zips) or metro_phone(combined)
+            basics = extract_basics(combined, site)
+        if not passed:
+            verdict = {
+                "match": False, "score": 0, "score_category": "No Match",
+                "reason": "no Minnesota service-area signal",
+                "location": "", "established": "", "is_template": False, "ecom_only": False,
+                "redirected_to": site.get("redirected_to", ""),
+                "redirect_domain": site.get("redirect_domain", ""),
+                "phone": site.get("phone", ""), "email": site.get("email", ""),
+            }
+            return {"row": row, "url": url, "pending_reason": None, "verdict": verdict, "basics": basics}
+        basics = {**basics, "service_tier": "core" if zips else "adjacent"}
+
+    verdict = classify_domain(domain, content, profile)
     verdict["redirected_to"] = site.get("redirected_to", "")
     verdict["redirect_domain"] = site.get("redirect_domain", "")
     verdict["phone"] = site.get("phone", "")
     verdict["email"] = site.get("email", "")
-    return {"row": row, "url": url, "pending_reason": None, "verdict": verdict}
+    return {"row": row, "url": url, "pending_reason": None, "verdict": verdict, "basics": basics}
 
 
 def _parse_iso(value: str | None) -> datetime | None:
@@ -808,6 +839,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
             completed += 1
             result = future.result()
             row = result["row"]
+            basics = result.get("basics", {})  # per-crawl dataset fields, persisted on every row
             domain = row["domain"]
             url = result["url"]
             now = utcnow().isoformat()
@@ -821,7 +853,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
 
                 if expires_at and next_check_dt > expires_at:
                     print(f"{prefix} ⏳ expired — {result['pending_reason']}", flush=True)
-                    pending_updates.append({"domain": domain, "status": "expired",
+                    pending_updates.append({**basics, "domain": domain, "status": "expired",
                                             "last_error": result["pending_reason"],
                                             "redirected_to": result.get("redirected_to", ""),
                                             "redirect_domain": result.get("redirect_domain", ""),
@@ -835,7 +867,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
                         flush=True,
                     )
                     site_pending_retry += 1
-                    pending_updates.append({"domain": domain, "status": "site_pending",
+                    pending_updates.append({**basics, "domain": domain, "status": "site_pending",
                                             "last_error": result["pending_reason"],
                                             "redirected_to": result.get("redirected_to", ""),
                                             "redirect_domain": result.get("redirect_domain", ""),
@@ -867,7 +899,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
                 ]))
                 print(f"{prefix} ✓ YES — {v['reason']}  {flags}", flush=True)
                 next_rescrape = (utcnow() + timedelta(days=rescrape_days)).isoformat()
-                pending_updates.append({"domain": domain, "status": "matched",
+                pending_updates.append({**basics, "domain": domain, "status": "matched",
                                         "classification_reason": v["reason"],
                                         "location": location, "established": established,
                                         "is_template": is_template, "ecom_only": ecom_only,
@@ -891,7 +923,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
                 v = result["verdict"]
                 if v.get("reason") == "classification error":
                     print(f"{prefix} ⏳ pending — LLM error, will retry", flush=True)
-                    pending_updates.append({"domain": domain, "status": "site_pending",
+                    pending_updates.append({**basics, "domain": domain, "status": "site_pending",
                                             "last_error": "classification error",
                                             "last_checked_at": now, "attempt_count": count})
                 else:
@@ -901,7 +933,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
                     score_tag = f" [{score_cat}:{score}]" if score >= 40 else ""
                     print(f"{prefix} ✗ NO — {v['reason']}{score_tag}", flush=True)
                     next_rescrape = (utcnow() + timedelta(days=rescrape_days)).isoformat()
-                    pending_updates.append({"domain": domain, "status": "not_outdoor",
+                    pending_updates.append({**basics, "domain": domain, "status": "not_outdoor",
                                             "classification_reason": v["reason"],
                                             "score": score, "score_category": score_cat,
                                             "redirected_to": v.get("redirected_to", ""),
@@ -968,6 +1000,11 @@ def scan_new_domains(
     """
     if profile is None:
         profile = get_profile()
+    # minnesota runs the firehose with the domain-NAME keyword filter OFF; force it off
+    # here (defense-in-depth) so a forgotten --keywords in CI can't reject the whole MN
+    # queue as "no keyword match in domain name".
+    if profile.bypass_keyword_filter:
+        keyword_filter = False
     domain_store.init_db()
     expired = domain_store.expire_stale()
     if expired:

@@ -5,15 +5,27 @@ export const dynamic = "force-dynamic";
 export default async function KeywordsPage({ params }: { params: Promise<{ industry: string }> }) {
   const { industry } = await params;
   const { groups, count } = keywordsFor(industry);
+  const isMinnesota = industry === "minnesota";
 
   return (
     <section className="stack">
       <div className="pageHeader">
         <div>
-          <h1>Scan Keywords</h1>
+          <h1>{isMinnesota ? "Service-Area Signals" : "Scan Keywords"}</h1>
           <p>
-            Newly registered domains whose name contains one of these words are pulled into the
-            pipeline for geo-check and scraping. {count} keywords across {groups.length} categories.
+            {isMinnesota ? (
+              <>
+                Minnesota scans the full newly-registered-domain firehose (no domain-name filter).
+                A domain is kept when its fetched page <strong>content</strong> shows one of these
+                location signals — a core service-area ZIP, a Twin Cities metro phone, or a Minnesota
+                address. {count} core ZIPs across {groups.length} signal groups.
+              </>
+            ) : (
+              <>
+                Newly registered domains whose name contains one of these words are pulled into the
+                pipeline for geo-check and scraping. {count} keywords across {groups.length} categories.
+              </>
+            )}
           </p>
         </div>
       </div>

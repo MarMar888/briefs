@@ -12,6 +12,7 @@ export type Industry = {
 export const INDUSTRIES: Industry[] = [
   { slug: "outdoor", label: "⛰️ Outdoor Sports", short: "Outdoor" },
   { slug: "construction", label: "🏗️ Construction", short: "Construction" },
+  { slug: "minnesota", label: "🧹 Minnesota", short: "MN" },
 ];
 
 export const DEFAULT_INDUSTRY = "outdoor";

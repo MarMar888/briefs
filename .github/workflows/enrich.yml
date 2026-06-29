@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        vertical: [outdoor, construction]
+        vertical: [outdoor, construction, minnesota]
     # Per-vertical group so each market's audit serializes only against itself
     # (prevents two enrich runs stacking up for the same vertical). Runs independently
     # of scan-$vertical (Live Ingest + Backfill) — enrichment reads matched leads,

@@ -171,7 +171,7 @@ async def _crawl4ai_fetch_async(url: str, max_chars: int, page_timeout_ms: int) 
     from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 
     config = CrawlerRunConfig(
-        excluded_tags=["nav", "footer", "aside"],
+        excluded_tags=["nav", "aside"],  # keep footer — it carries address/ZIP/phone for the geo gate
         remove_overlay_elements=True,
         page_timeout=page_timeout_ms,
         verbose=False,
@@ -189,7 +189,24 @@ async def _crawl4ai_fetch_async(url: str, max_chars: int, page_timeout_ms: int) 
         return ""
     md = result.markdown
     text = (md.fit_markdown or md.raw_markdown) if hasattr(md, "fit_markdown") else str(md)
-    return re.sub(r"\s+", " ", text).strip()[:max_chars]
+    text = re.sub(r"\s+", " ", text).strip()[:max_chars]
+
+    # The pruned markdown drops <script type=ld+json> and often the footer — exactly
+    # where a JS/Cloudflare site's schema.org PostalAddress (ZIP/phone) lives. Mirror the
+    # plain-HTTP path: pull JSON-LD + footer from the rendered DOM (already downloaded —
+    # no extra fetch) and append them so the geo gate can see the address. Markdown
+    # rendering is non-deterministic under Cloudflare; the structured JSON-LD is not.
+    extra = ""
+    try:
+        soup = BeautifulSoup(result.html or "", "html.parser")
+        jsonld = " ".join(
+            s.get_text(" ", strip=True) for s in soup.find_all("script", type="application/ld+json")
+        )[:1500]
+        footer = " ".join(f.get_text(" ", strip=True) for f in soup.find_all("footer"))[:1500]
+        extra = re.sub(r"\s+", " ", " ".join(filter(None, [footer, jsonld]))).strip()
+    except Exception:
+        pass
+    return " ".join(filter(None, [text, extra])) if extra else text
 
 
 def _fetch_via_crawl4ai(url: str, max_chars: int = 3000) -> str:
@@ -258,42 +275,111 @@ def _fetch_via_firecrawl(url: str, max_chars: int = 3000) -> str:
         return ""
 
 
-def _fetch_page_text(url: str, max_chars: int = 1000) -> str:
-    """Fetches a URL and returns cleaned text content.
+BROWSER_HEADERS = {
+    # A realistic desktop-Chrome header set. Validated to turn 403s (bot walls that
+    # block a bare "Mozilla/5.0") into 200s — a near-free coverage win for all verticals.
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Upgrade-Insecure-Requests": "1",
+}
 
-    Tries plain HTTP first. Escalates to Crawl4AI (local Playwright) for
-    JS-heavy sites when plain content is below threshold. Switch the escalation
-    call to _fetch_via_firecrawl to restore Firecrawl when credits are available.
+
+def _fetch_page_text(url: str, max_chars: int = 1000) -> tuple[str, str]:
+    """Fetch a URL; return ``(text, title)``.
+
+    Plain HTTP first (realistic browser headers), escalating to Crawl4AI (local
+    Playwright) for JS-heavy sites when plain content is below threshold. The page
+    ``<title>`` is returned for the dataset. Footer text and schema.org JSON-LD are
+    preserved and appended *after* the (truncated) body, because that is where a
+    business's address / ZIP / phone usually lives — the signal the geo gate needs —
+    and a long body must not be able to push it out of the window.
     """
     if not url:
-        return ""
+        return "", ""
 
-    plain_text = ""
+    plain_text, title = "", ""
+    worth_rendering = False    # only escalate to Playwright when a render could plausibly help
     try:
-        resp = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+        resp = requests.get(url, timeout=8, headers=BROWSER_HEADERS)
+        raw = resp.text or ""
+        # Decide BEFORE raise_for_status (so a 403 still counts). Render is worth it for a
+        # bot wall (4xx/5xx — a real browser may pass, e.g. Cloudflare) or a real JS shell
+        # (has <script> / a substantial body). Skip it for a tiny no-script stub (empty
+        # holding page) and for network-dead domains (no response at all) — a browser
+        # recovers nothing there and the render burns 5-20s. This is where most wasted
+        # renders on the NRD firehose come from.
+        worth_rendering = resp.status_code >= 400 or len(raw) >= 256 or "<script" in raw.lower()
         resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = BeautifulSoup(raw, "html.parser")
+        if soup.title:
+            title = soup.title.get_text(strip=True)
         meta_text = " ".join(
             tag.get("content", "")
             for tag in soup.find_all("meta")
             if tag.get("name", "").lower() in {"description", "og:description", "twitter:description"}
             or tag.get("property", "").lower() in {"og:description", "twitter:description"}
         )
+        jsonld = " ".join(
+            s.get_text(" ", strip=True) for s in soup.find_all("script", type="application/ld+json")
+        )[:1500]
+        footer_text = " ".join(f.get_text(" ", strip=True) for f in soup.find_all("footer"))[:1500]
         for tag in soup(["script", "style", "nav", "footer"]):
             tag.decompose()
-        plain_text = " ".join(filter(None, [meta_text, soup.get_text(separator=" ", strip=True)]))
-        plain_text = plain_text[:max_chars]
+        body = soup.get_text(separator=" ", strip=True)
+        plain_text = " ".join(filter(None, [meta_text, body[:max_chars], footer_text, jsonld]))
     except Exception:
         pass
 
     if len(plain_text.strip()) >= _MIN_CONTENT_CHARS:
-        return plain_text
+        return plain_text, title
 
-    fc_text = _fetch_via_crawl4ai(url, max_chars=max_chars)
-    if fc_text:
-        return fc_text
+    if worth_rendering:
+        fc_text = _fetch_via_crawl4ai(url, max_chars=max_chars)
+        if fc_text:
+            return fc_text, title
 
-    return plain_text
+    return plain_text, title
+
+
+_CONTACT_PATHS = ("/contact", "/contact-us", "/locations", "/about", "/service-area")
+
+
+def _fetch_contact_text(url: str, max_chars: int = 2000) -> str:
+    """Plain-HTTP fetch of likely contact/location pages — the geo gate's Tier-1
+    "second look" when a homepage shows an MN signal but no service-area ZIP yet.
+    No Crawl4AI, no enricher import. Short-circuits on the first page that shows an MN
+    signal; otherwise returns the concatenated text of the pages it reached."""
+    from urllib.parse import urlparse
+    from geo_gate import mn_signal, metro_phone
+    try:
+        p = urlparse(url)
+        root = f"{p.scheme}://{p.netloc}"
+    except Exception:
+        return ""
+    found: list[str] = []
+    for path in _CONTACT_PATHS:
+        try:
+            r = requests.get(root + path, timeout=6, headers=BROWSER_HEADERS, allow_redirects=True)
+        except Exception:
+            continue
+        if not getattr(r, "ok", False) or not r.text:
+            continue
+        soup = BeautifulSoup(r.text, "html.parser")
+        jsonld = " ".join(
+            s.get_text(" ", strip=True) for s in soup.find_all("script", type="application/ld+json")
+        )[:1000]
+        footer_text = " ".join(f.get_text(" ", strip=True) for f in soup.find_all("footer"))[:1000]
+        for tag in soup(["script", "style", "nav"]):
+            tag.decompose()
+        combined = " ".join(
+            filter(None, [soup.get_text(" ", strip=True)[:max_chars], footer_text, jsonld])
+        )
+        if mn_signal(combined) or metro_phone(combined):
+            return combined
+        found.append(combined)
+    return " ".join(found)[: max_chars * 2]
 
 
 _NO_SIGNALS = ["guide service", "guide services", "charter service", "fishing charter"]
@@ -339,14 +425,15 @@ def validate_site(url: str) -> dict:
     redirected_to = final_url or ""
     redirect_domain = _site_key(final_url) if final_url else ""
 
-    content = _fetch_page_text(url, max_chars=3000)
+    content, title = _fetch_page_text(url, max_chars=3000)
     if not content and url.startswith("https://"):
-        content = _fetch_page_text("http://" + url.removeprefix("https://"), max_chars=3000)
+        content, title = _fetch_page_text("http://" + url.removeprefix("https://"), max_chars=3000)
 
     if not content:
         return {
             "reachable": False,
             "content": "",
+            "title": title,
             "pending_reason": "no response or fetch failed",
             "redirected_to": redirected_to,
             "redirect_domain": redirect_domain,
@@ -361,6 +448,7 @@ def validate_site(url: str) -> dict:
             return {
                 "reachable": True,
                 "content": content,
+                "title": title,
                 "pending_reason": f"parked/placeholder ({pattern})",
                 "redirected_to": redirected_to,
                 "redirect_domain": redirect_domain,
@@ -371,6 +459,7 @@ def validate_site(url: str) -> dict:
         return {
             "reachable": True,
             "content": content,
+            "title": title,
             "pending_reason": "content too sparse",
             "redirected_to": redirected_to,
             "redirect_domain": redirect_domain,
@@ -380,6 +469,7 @@ def validate_site(url: str) -> dict:
     return {
         "reachable": True,
         "content": content,
+        "title": title,
         "pending_reason": None,
         "redirected_to": redirected_to,
         "redirect_domain": redirect_domain,
@@ -438,7 +528,7 @@ def classify(business_name: str, city: str, website_url: str | None) -> dict:
         base_url="http://localhost:11434/v1",
     )
 
-    page_text = _fetch_page_text(website_url) if website_url else "No website found"
+    page_text = _fetch_page_text(website_url)[0] if website_url else "No website found"
 
     prompt = OUTDOOR_SPORTS_PROMPT.format(
         name=business_name,

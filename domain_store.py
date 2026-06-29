@@ -206,6 +206,16 @@ _MIGRATIONS = [
     "ALTER TABLE domains ADD COLUMN classified_version TEXT",
     "ALTER TABLE domains ADD COLUMN enriched_version TEXT",
     "ALTER TABLE domains ADD COLUMN industry TEXT NOT NULL DEFAULT 'outdoor'",
+    # minnesota vertical: per-crawl "basics" stored on EVERY reachable row (matched or
+    # rejected) to build a dataset, plus the gate's service-area tier and queue priority.
+    "ALTER TABLE domains ADD COLUMN crawl_title TEXT",
+    "ALTER TABLE domains ADD COLUMN content_snippet TEXT",
+    "ALTER TABLE domains ADD COLUMN detected_zips TEXT",
+    "ALTER TABLE domains ADD COLUMN detected_state TEXT",
+    "ALTER TABLE domains ADD COLUMN is_reachable INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE domains ADD COLUMN mn_signal INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE domains ADD COLUMN service_tier TEXT",
+    "ALTER TABLE domains ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
 ]
 
 
@@ -264,14 +274,21 @@ def upsert_new(domains: list[str], source_date: str, random_sample: bool = False
     expires_at = (now_dt + timedelta(days=TRACKING_DAYS)).isoformat()
     rs_flag = 1 if random_sample else 0
     version = get_version()
+    # Queue prioritization (minnesota only): tag rows whose NAME hints Twin Cities so
+    # get_due surfaces them first. Reorder-only; non-minnesota verticals stay priority 0.
+    prioritize = industry == "minnesota"
+    name_priority = None
+    if prioritize:
+        from geo_gate import name_priority
     inserted = 0
     with closing(_db()) as conn:
         for domain in domains:
+            pr = name_priority(domain) if prioritize else 0
             cur = conn.execute(
                 "INSERT OR IGNORE INTO domains "
-                "(domain, source_date, first_seen_at, last_seen_at, expires_at, status, random_sample, found_version, industry) "
-                "VALUES (?, ?, ?, ?, ?, 'new', ?, ?, ?)",
-                (domain, source_date, now, now, expires_at, rs_flag, version, industry),
+                "(domain, source_date, first_seen_at, last_seen_at, expires_at, status, random_sample, found_version, industry, priority) "
+                "VALUES (?, ?, ?, ?, ?, 'new', ?, ?, ?, ?)",
+                (domain, source_date, now, now, expires_at, rs_flag, version, industry, pr),
             )
             inserted += cur.rowcount
         conn.commit()
@@ -305,6 +322,9 @@ def get_due(statuses: list[str], industry: str | None = None) -> list[dict]:
     if industry is not None:
         sql += " AND industry = ?"
         params.append(industry)
+    # Priority first (minnesota queue prioritization; 0 for every other vertical, so
+    # this is a no-op there), then oldest-first for a stable, fair drain order.
+    sql += " ORDER BY priority DESC, first_seen_at"
     with closing(_db()) as conn:
         cursor = conn.execute(sql, tuple(params))
         return _rows_to_dicts(cursor)
