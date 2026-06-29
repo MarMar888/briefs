@@ -18,7 +18,13 @@ from vertical_profiles import get_profile
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 OPENROUTER_MODEL   = os.environ.get("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct")
-_LLM_RETRIES       = 6
+# The LLM call is hard-bounded so one slow / rate-limited domain can't tie up a
+# site-phase worker for minutes. The OpenAI SDK default is a 600s timeout *with* its
+# own internal retries — catastrophic when thousands of domains share a fixed CI
+# runtime budget (a few stuck workers stall the whole batch until the job is killed).
+_LLM_RETRIES       = int(os.environ.get("LLM_RETRIES", "4"))
+_LLM_TIMEOUT       = float(os.environ.get("LLM_TIMEOUT_SECONDS", "45"))
+_LLM_MAX_BACKOFF   = float(os.environ.get("LLM_MAX_BACKOFF_SECONDS", "20"))
 _MIN_CONTENT_CHARS = 300
 
 DOMAIN_CLASSIFY_PROMPT = """You are identifying whether a newly registered website belongs to a NEW OR EARLY-STAGE commercial business in the outdoor sports industry that would need commercial insurance.
@@ -489,13 +495,31 @@ def _pre_classify(name: str) -> dict | None:
     return None
 
 
+_llm_client = None
+
+
+def _get_llm_client() -> "OpenAI":
+    """Lazily build a single OpenRouter client. ``timeout`` caps each request and
+    ``max_retries=0`` disables the SDK's own (unbounded-feeling) retries — this module
+    owns retry/backoff so the worst-case time per call is predictable."""
+    global _llm_client
+    if _llm_client is None:
+        _llm_client = OpenAI(
+            api_key=OPENROUTER_API_KEY,
+            base_url="https://openrouter.ai/api/v1",
+            timeout=_LLM_TIMEOUT,
+            max_retries=0,
+        )
+    return _llm_client
+
+
 def _call_llm(prompt: str, label: str) -> str:
-    """Call OpenRouter with simple retry on transient errors."""
+    """Call OpenRouter with bounded retry/backoff on transient errors."""
     if not OPENROUTER_API_KEY:
         print(f"[classifier] No OPENROUTER_API_KEY set — skipping '{label}'", flush=True)
         return ""
 
-    client = OpenAI(api_key=OPENROUTER_API_KEY, base_url="https://openrouter.ai/api/v1")
+    client = _get_llm_client()
     for attempt in range(_LLM_RETRIES):
         try:
             msg = client.chat.completions.create(
@@ -507,7 +531,9 @@ def _call_llm(prompt: str, label: str) -> str:
         except Exception as e:
             err = str(e)
             is_429 = "429" in str(e)
-            wait = (20.0 * (attempt + 1)) if is_429 else (3.0 * (attempt + 1))
+            # Cap the backoff: an unbounded escalating sleep on 429s is itself a way to
+            # burn the run's clock doing nothing.
+            wait = min((10.0 * (attempt + 1)) if is_429 else (3.0 * (attempt + 1)), _LLM_MAX_BACKOFF)
             print(f"[classifier] OpenRouter error for '{label}' (attempt {attempt+1}): {err} — retrying in {wait:.0f}s", flush=True)
             time.sleep(wait)
 

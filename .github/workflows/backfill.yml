@@ -76,6 +76,9 @@ jobs:
             --vertical ${{ matrix.vertical }}
         env:
           SITE_WORKERS: ${{ matrix.site_workers }}
+          # Exit cleanly ~12 min before the 100-min hard cap (commit progress, abandon
+          # stalled/queued work) so a stuck batch never burns the runner to the cap.
+          MAX_RUNTIME_MINUTES: "88"
           DOMAIN_DB_PATH: ${{ secrets.TURSO_DB_URL }}
           TURSO_DB_URL: ${{ secrets.TURSO_DB_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}

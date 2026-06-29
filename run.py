@@ -128,9 +128,14 @@ def main():
         # blow this run's time budget — the standalone Lead Audit job drains the
         # rest. Disqualified leads stay in the DB, just suppressed (see enricher).
         from enricher import run_enrichment
+        from domain_scanner import budget_exhausted
         inline_audit_limit = int(os.environ.get("INLINE_AUDIT_LIMIT", "200"))
-        print(f"[run] Running deep-search audit on newly matched leads (limit {inline_audit_limit})...")
-        run_enrichment(limit=inline_audit_limit, profile=profile)
+        if budget_exhausted():
+            print("[run] Skipping inline deep-search audit — runtime budget exhausted; "
+                  "the standalone Lead Audit job will drain it", flush=True)
+        else:
+            print(f"[run] Running deep-search audit on newly matched leads (limit {inline_audit_limit})...")
+            run_enrichment(limit=inline_audit_limit, profile=profile)
 
         unalerted = domain_store.get_unalerted_matches(industry=profile.name)
         if unalerted and send_match_alerts(unalerted, profile=profile):

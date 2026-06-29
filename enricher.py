@@ -638,7 +638,11 @@ def _extract_info(content: str, profile=None) -> dict:
     if not api_key or not content.strip():
         return {}
 
-    client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
+    # Bound the call (mirrors classifier._get_llm_client): the SDK default is a 600s
+    # timeout with its own retries — one stuck audit must not hold a worker, and the
+    # job's runtime budget, for ten minutes. This module owns retry/backoff below.
+    client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1",
+                    timeout=float(os.environ.get("ENRICH_LLM_TIMEOUT_SECONDS", "60")), max_retries=0)
     model = os.environ.get("OPENROUTER_ENRICH_MODEL") or os.environ.get(
         "OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct"
     )
