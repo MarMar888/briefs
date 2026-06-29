@@ -716,7 +716,7 @@ def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter:
                             "last_checked_at": now, "attempt_count": count})
             continue
 
-        if country != "US":
+        if country not in profile.geo_allowed_countries:
             geo_non_us += 1
             updates.append({"domain": domain, "status": "non_us", "resolved_ip": ip,
                             "country_code": country, "last_checked_at": now, "attempt_count": count})
@@ -724,7 +724,7 @@ def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter:
             geo_us += 1
             next_check = (utcnow() + timedelta(days=defer_site_days)).isoformat() if defer_site_days else None
             updates.append({"domain": domain, "status": "site_pending", "resolved_ip": ip,
-                            "country_code": "US", "website_url": f"https://{domain}",
+                            "country_code": country, "website_url": f"https://{domain}",
                             "next_check_at": next_check, "last_checked_at": now, "attempt_count": count})
 
     domain_store.batch_update_domains(updates)

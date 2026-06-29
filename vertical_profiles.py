@@ -52,6 +52,11 @@ class VerticalProfile:
     bypass_keyword_filter: bool = False        # minnesota: run the firehose with the domain-NAME filter OFF
     require_content_geo_gate: bool = False     # minnesota: gate on a service-area ZIP / metro phone in fetched content
     service_areas: tuple = ()                  # geo_gate.ServiceArea tuple for the content geo gate
+    geo_allowed_countries: tuple[str, ...] = ("US",)  # IP-country codes that survive the geo pre-filter.
+                                               # minnesota adds CA/MX because Cloudflare/CDN anycast IPs
+                                               # geolocate to North-American edge nodes, so a US business
+                                               # behind Cloudflare reads as Canada — the content ZIP/phone
+                                               # gate is the real arbiter, so we let those through to it.
 
 
 # --------------------------------------------------------------------------
@@ -314,6 +319,8 @@ def _build_minnesota() -> VerticalProfile:
         bypass_keyword_filter=True,
         require_content_geo_gate=True,
         service_areas=MN_CLEANING_AREAS,
+        geo_allowed_countries=("US", "CA", "MX"),  # Cloudflare/CDN anycast → CA/MX edge nodes;
+                                                   # content ZIP/phone gate filters the real non-MN ones
     )
 
 

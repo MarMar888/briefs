@@ -189,7 +189,24 @@ async def _crawl4ai_fetch_async(url: str, max_chars: int, page_timeout_ms: int) 
         return ""
     md = result.markdown
     text = (md.fit_markdown or md.raw_markdown) if hasattr(md, "fit_markdown") else str(md)
-    return re.sub(r"\s+", " ", text).strip()[:max_chars]
+    text = re.sub(r"\s+", " ", text).strip()[:max_chars]
+
+    # The pruned markdown drops <script type=ld+json> and often the footer — exactly
+    # where a JS/Cloudflare site's schema.org PostalAddress (ZIP/phone) lives. Mirror the
+    # plain-HTTP path: pull JSON-LD + footer from the rendered DOM (already downloaded —
+    # no extra fetch) and append them so the geo gate can see the address. Markdown
+    # rendering is non-deterministic under Cloudflare; the structured JSON-LD is not.
+    extra = ""
+    try:
+        soup = BeautifulSoup(result.html or "", "html.parser")
+        jsonld = " ".join(
+            s.get_text(" ", strip=True) for s in soup.find_all("script", type="application/ld+json")
+        )[:1500]
+        footer = " ".join(f.get_text(" ", strip=True) for f in soup.find_all("footer"))[:1500]
+        extra = re.sub(r"\s+", " ", " ".join(filter(None, [footer, jsonld]))).strip()
+    except Exception:
+        pass
+    return " ".join(filter(None, [text, extra])) if extra else text
 
 
 def _fetch_via_crawl4ai(url: str, max_chars: int = 3000) -> str:
@@ -283,10 +300,19 @@ def _fetch_page_text(url: str, max_chars: int = 1000) -> tuple[str, str]:
         return "", ""
 
     plain_text, title = "", ""
+    worth_rendering = False    # only escalate to Playwright when a render could plausibly help
     try:
         resp = requests.get(url, timeout=8, headers=BROWSER_HEADERS)
+        raw = resp.text or ""
+        # Decide BEFORE raise_for_status (so a 403 still counts). Render is worth it for a
+        # bot wall (4xx/5xx — a real browser may pass, e.g. Cloudflare) or a real JS shell
+        # (has <script> / a substantial body). Skip it for a tiny no-script stub (empty
+        # holding page) and for network-dead domains (no response at all) — a browser
+        # recovers nothing there and the render burns 5-20s. This is where most wasted
+        # renders on the NRD firehose come from.
+        worth_rendering = resp.status_code >= 400 or len(raw) >= 256 or "<script" in raw.lower()
         resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = BeautifulSoup(raw, "html.parser")
         if soup.title:
             title = soup.title.get_text(strip=True)
         meta_text = " ".join(
@@ -309,9 +335,10 @@ def _fetch_page_text(url: str, max_chars: int = 1000) -> tuple[str, str]:
     if len(plain_text.strip()) >= _MIN_CONTENT_CHARS:
         return plain_text, title
 
-    fc_text = _fetch_via_crawl4ai(url, max_chars=max_chars)
-    if fc_text:
-        return fc_text, title
+    if worth_rendering:
+        fc_text = _fetch_via_crawl4ai(url, max_chars=max_chars)
+        if fc_text:
+            return fc_text, title
 
     return plain_text, title
 
