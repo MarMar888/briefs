@@ -64,6 +64,10 @@ jobs:
           --vertical ${{ matrix.vertical }}
         env:
           SITE_WORKERS: ${{ matrix.site_workers }}
+          # Stop the pipeline cleanly ~15 min before the 300-min hard cap so it commits
+          # finished work and exits instead of being killed mid-batch with stalled
+          # workers burning the tail (the June failure mode).
+          MAX_RUNTIME_MINUTES: "285"
           DOMAIN_DB_PATH: ${{ secrets.TURSO_DB_URL }}
           TURSO_DB_URL: ${{ secrets.TURSO_DB_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}

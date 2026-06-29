@@ -54,6 +54,47 @@ GEO_RETRY_SLEEP_SECONDS = float(os.environ.get("GEO_RETRY_SLEEP_SECONDS", "5"))
 GEO_PROGRESS_INTERVAL = 25
 SITE_WORKERS = int(os.environ.get("SITE_WORKERS", "8"))
 KEYWORD_BATCH_SIZE = 25000
+
+# Wall-clock budget for one invocation. Set MAX_RUNTIME_MINUTES a little under the
+# GitHub job's `timeout-minutes` so the pipeline always stops itself *cleanly* —
+# committing finished work and abandoning in-flight/queued domains — instead of being
+# hard-killed mid-batch. A hard kill is what burned June's budget: a few stalled
+# workers held the run open (doing nothing) until the cap. 0 = unbounded (local runs).
+_PROCESS_START = time.monotonic()
+MAX_RUNTIME_MINUTES = float(os.environ.get("MAX_RUNTIME_MINUTES", "0"))
+
+
+def runtime_deadline() -> float | None:
+    """Monotonic deadline for this process, or None if unbounded."""
+    return _PROCESS_START + MAX_RUNTIME_MINUTES * 60 if MAX_RUNTIME_MINUTES > 0 else None
+
+
+def _budget_exhausted(deadline: float | None) -> bool:
+    return deadline is not None and time.monotonic() >= deadline
+
+
+def budget_exhausted() -> bool:
+    """True once this process has hit MAX_RUNTIME_MINUTES (public helper for callers
+    like run.py that want to skip optional follow-on work)."""
+    return _budget_exhausted(runtime_deadline())
+
+
+def _as_completed_until(futures, deadline: float | None):
+    """Yield futures as they finish, but stop pulling new results once the runtime
+    deadline passes — leaving the unfinished ones for the caller to cancel/abandon.
+    This is the guard against the failure mode that burned June's CI budget: a handful
+    of stalled workers (a hung fetch/LLM) keeping the run open, doing nothing, until the
+    job's hard `timeout-minutes` kill. We poll in short slices so we notice the deadline
+    promptly even while workers are mid-flight."""
+    pending = set(futures)
+    while pending:
+        if _budget_exhausted(deadline):
+            return
+        slice_timeout = 30.0
+        if deadline is not None:
+            slice_timeout = max(1.0, min(30.0, deadline - time.monotonic()))
+        done, pending = wait(pending, timeout=slice_timeout, return_when=FIRST_COMPLETED)
+        yield from done
 DOMAIN_RE = re.compile(r"^(?:https?://)?(?:www\.)?([a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+)", re.I)
 
 # Domain name keywords for pre-filtering NRDs before geo/scrape.
@@ -833,9 +874,11 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
             domain_store.batch_update_domains(pending_updates)
             pending_updates.clear()
 
-    with ThreadPoolExecutor(max_workers=SITE_WORKERS) as executor:
+    deadline = runtime_deadline()
+    executor = ThreadPoolExecutor(max_workers=SITE_WORKERS)
+    try:
         futures = {executor.submit(_check_domain, row, profile): row for row in due}
-        for future in as_completed(futures):
+        for future in _as_completed_until(futures, deadline):
             completed += 1
             result = future.result()
             row = result["row"]
@@ -947,13 +990,22 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
 
             if len(pending_updates) >= SITE_BATCH_SIZE:
                 _flush_site_updates()
+    finally:
+        # Commit everything finished, then tear the pool down WITHOUT waiting on stuck
+        # workers (cancel_futures drops the still-queued ones). The abandoned domains
+        # kept their 'site_pending' status — they're simply retried next run.
+        _flush_site_updates()
+        executor.shutdown(wait=False, cancel_futures=True)
 
-    _flush_site_updates()
+    deferred = total - completed
+    if deferred > 0:
+        print(f"[domain_scanner] Site phase: stopped on runtime budget — {completed}/{total} "
+              f"processed, {deferred} left site_pending for the next run", flush=True)
 
     keyword_processed = total - random_processed
     keyword_matched = len(matched) - random_matched
     site_stats = {
-        "site_processed": total,
+        "site_processed": completed,
         "site_not_outdoor": site_not_outdoor,
         "site_pending_retry": site_pending_retry,
         "random_processed": random_processed,
@@ -1114,6 +1166,11 @@ def scan_new_domains(
     geo_stats: dict = {"geo_us": 0, "geo_non_us": 0, "geo_failed": 0}
     if skip_geo:
         print("[domain_scanner] Skipping geo phase", flush=True)
+    elif _budget_exhausted(runtime_deadline()):
+        # Import alone used the whole budget — skip geo so the site phase (which drains
+        # the durable queue) gets whatever time is left next run, rather than this run
+        # geo-resolving domains it has no time to classify.
+        print("[domain_scanner] Skipping geo phase — runtime budget already exhausted", flush=True)
     else:
         geo_stats = _run_geo_phase(defer_site_days=defer_site_days, geo_limit=geo_limit, keyword_filter=keyword_filter, profile=profile)
 
