@@ -156,9 +156,31 @@ export const CONSTRUCTION_KEYWORD_GROUPS: KeywordGroup[] = [
 
 export const CONSTRUCTION_KEYWORD_COUNT = CONSTRUCTION_KEYWORD_GROUPS.reduce((sum, g) => sum + g.words.length, 0);
 
+// Minnesota has NO domain-name keywords. These are LOCATION signals matched in fetched
+// page CONTENT (footer / contact-page addresses), mirroring geo_gate.py. A core
+// service-area ZIP makes a "core" lead; a Twin Cities metro phone makes an "adjacent"
+// lead; the looser MN signals only trigger the contact-page second look.
+export const MINNESOTA_SIGNAL_GROUPS: KeywordGroup[] = [
+  {
+    label: "Core service-area ZIPs — a match here is a “core” lead",
+    words: ["55412", "55411", "55405", "55403", "55402", "55401", "55415", "55404", "55454", "55455", "55414", "55413", "55418", "55113", "55108", "55117", "55130", "55101", "55155", "55102", "55103", "55104", "55105", "55406", "55407", "55408", "55409", "55410", "55419", "55417"],
+  },
+  {
+    label: "Twin Cities metro phone area codes — a match is an “adjacent” lead",
+    words: ["612", "651", "763", "952"],
+  },
+  {
+    label: "Minnesota signals — these only trigger the contact-page second look",
+    words: [", MN", "MN ZIP 55xxx–56xxx", "218", "320", "507"],
+  },
+];
+
+export const MINNESOTA_SIGNAL_COUNT = 30;
+
 export const KEYWORDS_BY_INDUSTRY: Record<string, { groups: KeywordGroup[]; count: number }> = {
   outdoor: { groups: KEYWORD_GROUPS, count: KEYWORD_COUNT },
   construction: { groups: CONSTRUCTION_KEYWORD_GROUPS, count: CONSTRUCTION_KEYWORD_COUNT },
+  minnesota: { groups: MINNESOTA_SIGNAL_GROUPS, count: MINNESOTA_SIGNAL_COUNT },
 };
 
 export function keywordsFor(industry: string) {

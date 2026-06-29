@@ -12,7 +12,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        vertical: [outdoor, construction]
+        # Per-vertical flags: minnesota runs the firehose with NO --keywords (the name
+        # filter can't apply), its own limits, and more site workers. outdoor/construction
+        # keep their original behavior (--keywords, --domain-limit 3000 = run.py default).
+        include:
+          - vertical: outdoor
+            keywords_flag: "--keywords"
+            domain_limit: "3000"
+            geo_limit: "2000"
+            site_limit: "200"
+            site_workers: "8"
+          - vertical: construction
+            keywords_flag: "--keywords"
+            domain_limit: "3000"
+            geo_limit: "2000"
+            site_limit: "200"
+            site_workers: "8"
+          - vertical: minnesota
+            keywords_flag: ""
+            domain_limit: "0"
+            geo_limit: "8000"
+            site_limit: "4000"
+            site_workers: "16"
     # Per-vertical group: Live Ingest serializes against Backfill (both do
     # geo+site scanning on the same queue), but not Lead Audit (enrichment-only,
     # reads a different slice of the DB and doesn't conflict with scanning).
@@ -34,8 +55,15 @@ jobs:
         run: python -m playwright install chromium --with-deps
 
       - name: Run domain pipeline
-        run: python run.py --domains-only --domain-source domainsmonitor --keywords --geo-limit 2000 --site-limit 200 --vertical ${{ matrix.vertical }}
+        run: >
+          python run.py --domains-only --domain-source domainsmonitor
+          ${{ matrix.keywords_flag }}
+          --domain-limit ${{ matrix.domain_limit }}
+          --geo-limit ${{ matrix.geo_limit }}
+          --site-limit ${{ matrix.site_limit }}
+          --vertical ${{ matrix.vertical }}
         env:
+          SITE_WORKERS: ${{ matrix.site_workers }}
           DOMAIN_DB_PATH: ${{ secrets.TURSO_DB_URL }}
           TURSO_DB_URL: ${{ secrets.TURSO_DB_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}

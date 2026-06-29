@@ -10,9 +10,10 @@ The highest-value signal is newly registered domains: a business that just bough
 ## Verticals (one pipeline, many markets)
 
 The same pipeline runs multiple **markets** side by side — currently `outdoor` (the
-original OSI insurance-broker use case) and `construction` (newly-forming contractors as
-sales leads for a Ramp SDR). One shared database holds both; every lead row carries an
-`industry` column so the markets never mix.
+original OSI insurance-broker use case), `construction` (newly-forming contractors as
+sales leads for a Ramp SDR), and `minnesota` (any new brick-and-mortar business in a Twin
+Cities cleaning company's service area). One shared database holds them all; every lead row
+carries an `industry` column so the markets never mix.
 
 - **Selecting a vertical:** the `VERTICAL` env var (default `outdoor`), or `--vertical` on
   `run.py` / `enricher.py`. The default keeps the original OSI behavior byte-for-byte.
@@ -28,6 +29,22 @@ sales leads for a Ramp SDR). One shared database holds both; every lead row carr
   suppresses.)
 - **`not_outdoor`** is a vertical-agnostic "classifier-rejected" bucket — for construction
   it simply means "not a qualifying construction lead." (Kept as-is to avoid a status migration.)
+- **Minnesota is geographic, not industry-based.** The `minnesota` vertical has no industry
+  keyword, so it runs the **full NRD firehose with the domain-name filter OFF**
+  (`bypass_keyword_filter`) and gates on **fetched page content** instead
+  (`require_content_geo_gate`): a domain is kept only if its content shows a **core
+  service-area ZIP** (→ `service_tier = core`) or a **Twin Cities metro phone** (→ `adjacent`).
+  The gate, the service-area ZIP set, and the signal tokens live in **`geo_gate.py`**. Because
+  the name filter is off, the site phase scrapes harder (realistic browser headers, preserved
+  footer + JSON-LD, and a bounded contact-page "second look"), only gate-passers reach the LLM,
+  and full coverage **drains over time** via the durable queue (it won't clear a day's firehose
+  in one run — by design). Basic crawl info (title, snippet, detected ZIPs/state, phone, email)
+  is stored on **every reachable row** — matched or not — to build a dataset. Like construction,
+  it keeps established businesses (it just labels newness). Domain *names* that hint Twin Cities
+  (`minneapolis`, `stpaul`, `mn`…) are processed first via a reorder-only `priority`.
+- **Overlap (discoverer-wins).** All verticals share one firehose + DB with an immutable
+  `industry` stamp, so a Minnesota business whose domain *name* trips an outdoor/construction
+  keyword is claimed by that vertical and stays there. Accepted, bounded.
 
 ## What Counts As A Lead
 

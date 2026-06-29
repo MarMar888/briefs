@@ -22,7 +22,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        vertical: [outdoor, construction]
+        # minnesota MUST run without --keywords (it has none): if it inherited --keywords
+        # the geo phase would reject the entire MN queue as "no keyword match in domain
+        # name". Per-vertical flags + a profile-level backstop both enforce this.
+        include:
+          - vertical: outdoor
+            keywords_flag: "--keywords"
+            geo_limit: "1000"
+            site_limit: "1000"
+            site_workers: "8"
+          - vertical: construction
+            keywords_flag: "--keywords"
+            geo_limit: "1000"
+            site_limit: "1000"
+            site_workers: "8"
+          - vertical: minnesota
+            keywords_flag: ""
+            geo_limit: "6000"
+            site_limit: "5000"
+            site_workers: "16"
     # Per-vertical group so each market's backfill serializes only against its own
     # Live Ingest (both do geo+site scanning on the same queue); Lead Audit runs
     # independently in its own group. The two markets drain their queues in parallel.
@@ -45,18 +63,19 @@ jobs:
 
       - name: Run geo + site classification batch
         run: |
-          LIMIT="${{ github.event.inputs.site_limit || '1000' }}"
-          GEO_LIMIT="${{ github.event.inputs.geo_limit || '1000' }}"
-          echo "[backfill] Running geo + site classification, geo-limit=$GEO_LIMIT, site-limit=$LIMIT"
+          LIMIT="${{ github.event.inputs.site_limit || matrix.site_limit }}"
+          GEO_LIMIT="${{ github.event.inputs.geo_limit || matrix.geo_limit }}"
+          echo "[backfill] vertical=${{ matrix.vertical }} geo-limit=$GEO_LIMIT site-limit=$LIMIT"
           python run.py \
             --domains-only \
             --skip-domain-import \
             --domain-source domainsmonitor-file \
-            --keywords \
+            ${{ matrix.keywords_flag }} \
             --geo-limit "$GEO_LIMIT" \
             --site-limit "$LIMIT" \
             --vertical ${{ matrix.vertical }}
         env:
+          SITE_WORKERS: ${{ matrix.site_workers }}
           DOMAIN_DB_PATH: ${{ secrets.TURSO_DB_URL }}
           TURSO_DB_URL: ${{ secrets.TURSO_DB_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
