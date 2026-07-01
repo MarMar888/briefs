@@ -1,3 +1,4 @@
+import functools
 import os
 import sqlite3
 import time
@@ -237,6 +238,51 @@ def _db():
     return conn
 
 
+# Turso is a remote HTTP database; transient "connection reset" / 5xx / timeout blips
+# happen and must NOT abort a whole run — that throws away the CI minutes already spent
+# and (before this) even crashed the error handler. Retry with capped exponential
+# backoff. Each retry reopens a fresh connection (every write helper opens its own
+# `with closing(_db())`), so a reset connection is discarded, not reused.
+_DB_RETRY_ATTEMPTS = int(os.environ.get("DB_RETRY_ATTEMPTS", "6"))
+_DB_RETRY_MAX_BACKOFF = float(os.environ.get("DB_RETRY_MAX_BACKOFF_SECONDS", "8"))
+_TRANSIENT_DB_MARKERS = (
+    "hrana", "connection reset", "connection error", "http error", "stream closed",
+    "timed out", "timeout", "os error 104", "502", "503", "504",
+)
+
+
+def _is_transient_db_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _TRANSIENT_DB_MARKERS)
+
+
+def _execute_with_retry(fn, retries: int | None = None, backoff: float = 1.0):
+    """Run fn(), retrying transient Hrana/libSQL connection blips with capped backoff."""
+    attempts = retries or _DB_RETRY_ATTEMPTS
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            if not _is_transient_db_error(exc) or attempt == attempts - 1:
+                raise
+            wait = min(backoff * (2 ** attempt), _DB_RETRY_MAX_BACKOFF)
+            print(f"[domain_store] transient DB error (attempt {attempt+1}/{attempts}): "
+                  f"{exc} — retrying in {wait:.0f}s", flush=True)
+            time.sleep(wait)
+
+
+def _resilient(fn):
+    """Decorator: run a DB helper through the transient-retry loop. Applied to every
+    function that opens a connection so a single Turso connection blip can never kill
+    the pipeline — reads and writes alike. (batch_update_domains is the deliberate
+    exception: it retries per-chunk so a mid-batch blip doesn't re-commit prior chunks.)"""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        return _execute_with_retry(lambda: fn(*args, **kwargs))
+    return wrapper
+
+
+@_resilient
 def init_db() -> None:
     with closing(_db()) as conn:
         conn.execute(_SCHEMA)
@@ -280,19 +326,22 @@ def upsert_new(domains: list[str], source_date: str, random_sample: bool = False
     name_priority = None
     if prioritize:
         from geo_gate import name_priority
-    inserted = 0
-    with closing(_db()) as conn:
-        for domain in domains:
-            pr = name_priority(domain) if prioritize else 0
-            cur = conn.execute(
-                "INSERT OR IGNORE INTO domains "
-                "(domain, source_date, first_seen_at, last_seen_at, expires_at, status, random_sample, found_version, industry, priority) "
-                "VALUES (?, ?, ?, ?, ?, 'new', ?, ?, ?, ?)",
-                (domain, source_date, now, now, expires_at, rs_flag, version, industry, pr),
-            )
-            inserted += cur.rowcount
-        conn.commit()
-    return inserted
+    def _run():
+        inserted = 0
+        with closing(_db()) as conn:
+            for domain in domains:
+                pr = name_priority(domain) if prioritize else 0
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO domains "
+                    "(domain, source_date, first_seen_at, last_seen_at, expires_at, status, random_sample, found_version, industry, priority) "
+                    "VALUES (?, ?, ?, ?, ?, 'new', ?, ?, ?, ?)",
+                    (domain, source_date, now, now, expires_at, rs_flag, version, industry, pr),
+                )
+                inserted += cur.rowcount
+            conn.commit()
+        return inserted
+
+    return _execute_with_retry(_run)
 
 
 def _rows_to_dicts(cursor) -> list[dict]:
@@ -305,6 +354,7 @@ def _rows_to_dicts(cursor) -> list[dict]:
     return [dict(zip(columns, row)) for row in rows]
 
 
+@_resilient
 def get_due(statuses: list[str], industry: str | None = None) -> list[dict]:
     """Return domains with given statuses that are due for processing.
 
@@ -330,6 +380,7 @@ def get_due(statuses: list[str], industry: str | None = None) -> list[dict]:
         return _rows_to_dicts(cursor)
 
 
+@_resilient
 def expire_stale() -> int:
     """Expire non-terminal domains whose 180-day tracking window has elapsed."""
     now = utcnow().isoformat()
@@ -344,6 +395,7 @@ def expire_stale() -> int:
         return cur.rowcount
 
 
+@_resilient
 def requeue_rescrapes() -> int:
     """Move matched/not_outdoor domains back to site_pending when their rescrape date is due.
     Skips human-reviewed domains to preserve manual verdicts."""
@@ -362,6 +414,7 @@ def requeue_rescrapes() -> int:
         return cur.rowcount
 
 
+@_resilient
 def get_unenriched_matches(limit: int = 0, industry: str | None = None) -> list[dict]:
     """Return matched domains that have not yet been enriched."""
     with closing(_db()) as conn:
@@ -377,6 +430,7 @@ def get_unenriched_matches(limit: int = 0, industry: str | None = None) -> list[
         return _rows_to_dicts(cursor)
 
 
+@_resilient
 def get_matches_to_reaudit(limit: int = 0, stale_only: bool = True,
                            industry: str | None = None) -> list[dict]:
     """Return matched domains to re-run through the deep-search audit.
@@ -404,6 +458,7 @@ def get_matches_to_reaudit(limit: int = 0, stale_only: bool = True,
         return _rows_to_dicts(cursor)
 
 
+@_resilient
 def get_unalerted_matches(industry: str | None = None) -> list[dict]:
     """Return matched domains that are ready to alert.
 
@@ -428,6 +483,7 @@ def get_unalerted_matches(industry: str | None = None) -> list[dict]:
         return _rows_to_dicts(cursor)
 
 
+@_resilient
 def mark_alert_sent(domains: list[str]) -> None:
     if not domains:
         return
@@ -441,6 +497,7 @@ def mark_alert_sent(domains: list[str]) -> None:
         conn.commit()
 
 
+@_resilient
 def get_pending() -> list[dict]:
     """Return active domains still waiting for DNS/site readiness."""
     with closing(_db()) as conn:
@@ -458,22 +515,12 @@ def review_domain(domain: str, verdict: str, notes: str = "") -> None:
     update_domain(domain, human_reviewed=1, human_verdict=verdict, human_review_notes=notes)
 
 
+@_resilient
 def get_matched() -> list[dict]:
     """Return all matched domains from the view."""
     with closing(_db()) as conn:
         cursor = conn.execute("SELECT * FROM matched_domains")
         return _rows_to_dicts(cursor)
-
-
-def _execute_with_retry(fn, retries: int = 3, backoff: float = 1.0):
-    """Run fn(), retrying on transient Hrana/libSQL HTTP errors."""
-    for attempt in range(retries):
-        try:
-            return fn()
-        except ValueError as exc:
-            if "Hrana" not in str(exc) or attempt == retries - 1:
-                raise
-            time.sleep(backoff * (2 ** attempt))
 
 
 def update_domain(domain: str, **fields) -> None:
@@ -524,14 +571,18 @@ def batch_update_domains(updates: list, chunk_size: int = 100) -> None:
 def start_run(source: str, industry: str = "outdoor") -> int:
     """Record the start of a pipeline run. Returns the new run id."""
     now = utcnow().isoformat()
-    with closing(_db()) as conn:
-        cur = conn.execute(
-            "INSERT INTO pipeline_runs (started_at, source, status, pipeline_version, industry) "
-            "VALUES (?, ?, 'running', ?, ?)",
-            (now, source, get_version(), industry),
-        )
-        conn.commit()
-        return cur.lastrowid
+
+    def _run():
+        with closing(_db()) as conn:
+            cur = conn.execute(
+                "INSERT INTO pipeline_runs (started_at, source, status, pipeline_version, industry) "
+                "VALUES (?, ?, 'running', ?, ?)",
+                (now, source, get_version(), industry),
+            )
+            conn.commit()
+            return cur.lastrowid
+
+    return _execute_with_retry(_run)
 
 
 def finish_run(
@@ -558,29 +609,34 @@ def finish_run(
 ) -> None:
     now = utcnow().isoformat()
     status = "error" if error else "done"
-    with closing(_db()) as conn:
-        conn.execute(
-            "UPDATE pipeline_runs "
-            "SET finished_at=?, status=?, downloaded=?, tld_filtered=?, keyword_filtered=?, "
-            "random_inserted=?, inserted=?, geo_us=?, geo_non_us=?, geo_failed=?, "
-            "site_processed=?, matched=?, site_not_outdoor=?, site_pending_retry=?, "
-            "random_processed=?, random_matched=?, keyword_processed=?, keyword_matched=?, "
-            "expired=?, error=? "
-            "WHERE id=?",
-            (
-                now, status,
-                downloaded, tld_filtered, keyword_filtered,
-                random_inserted, inserted,
-                geo_us, geo_non_us, geo_failed,
-                site_processed, matched, site_not_outdoor, site_pending_retry,
-                random_processed, random_matched, keyword_processed, keyword_matched,
-                expired, error,
-                run_id,
-            ),
-        )
-        conn.commit()
+
+    def _run():
+        with closing(_db()) as conn:
+            conn.execute(
+                "UPDATE pipeline_runs "
+                "SET finished_at=?, status=?, downloaded=?, tld_filtered=?, keyword_filtered=?, "
+                "random_inserted=?, inserted=?, geo_us=?, geo_non_us=?, geo_failed=?, "
+                "site_processed=?, matched=?, site_not_outdoor=?, site_pending_retry=?, "
+                "random_processed=?, random_matched=?, keyword_processed=?, keyword_matched=?, "
+                "expired=?, error=? "
+                "WHERE id=?",
+                (
+                    now, status,
+                    downloaded, tld_filtered, keyword_filtered,
+                    random_inserted, inserted,
+                    geo_us, geo_non_us, geo_failed,
+                    site_processed, matched, site_not_outdoor, site_pending_retry,
+                    random_processed, random_matched, keyword_processed, keyword_matched,
+                    expired, error,
+                    run_id,
+                ),
+            )
+            conn.commit()
+
+    _execute_with_retry(_run)
 
 
+@_resilient
 def get_runs(limit: int = 100) -> list[dict]:
     with closing(_db()) as conn:
         cursor = conn.execute(
