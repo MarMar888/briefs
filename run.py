@@ -116,7 +116,12 @@ def main():
             )
             domain_store.finish_run(run_id, **scan_stats)
         except Exception as exc:
-            domain_store.finish_run(run_id, matched=0, downloaded=0, inserted=0, expired=0, error=str(exc))
+            # Best-effort: if the DB itself is what failed, recording the failure will
+            # too — don't let that mask the real error with a second traceback.
+            try:
+                domain_store.finish_run(run_id, matched=0, downloaded=0, inserted=0, expired=0, error=str(exc))
+            except Exception as fin_exc:
+                print(f"[run] Could not record run failure (DB unreachable): {fin_exc}", flush=True)
             raise
 
 
