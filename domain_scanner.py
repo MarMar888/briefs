@@ -661,6 +661,7 @@ def _resolve_domains(domains: list[str]) -> dict[str, str]:
                     f"{completed}/{total} checked, {len(resolved)} resolved",
                     flush=True,
                 )
+                domain_store.heartbeat()
     return resolved
 
 
@@ -697,6 +698,7 @@ def _geolocate_ips(ips: list[str]) -> dict[str, str]:
                 f"({batch_num}/{total_batches} batches), {len(country_by_ip)} located",
                 flush=True,
             )
+            domain_store.heartbeat()
         if i + GEO_BATCH_SIZE < len(ips):
             time.sleep(GEO_BATCH_SLEEP_SECONDS)
     return country_by_ip
@@ -717,13 +719,14 @@ def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter:
         rejected = [r for r in due if not keyword_results[r["domain"]]]
         if rejected:
             print(f"[domain_scanner]   Geo keyword filter: skipping {len(rejected)} non-keyword domains", flush=True)
+            domain_store.heartbeat(phase="geo:keyword-reject-write")
             domain_store.batch_update_domains([
                 {"domain": r["domain"], "status": "not_outdoor",
                  "classification_reason": "no keyword match in domain name",
                  "classified_version": get_version(),
                  "classified_at": now, "last_checked_at": now}
                 for r in rejected
-            ])
+            ], label="geo:keyword-reject")
         due = [r for r in due if keyword_results[r["domain"]]]
 
     if geo_limit > 0:
@@ -731,6 +734,7 @@ def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter:
     if not due:
         return {"geo_us": 0, "geo_non_us": 0, "geo_failed": 0}
     print(f"[domain_scanner] Geo phase: {len(due)} domains", flush=True)
+    domain_store.heartbeat(phase=f"geo:resolve ({len(due)})")
 
     ip_by_domain = _resolve_domains([r["domain"] for r in due])
     print(f"[domain_scanner]   {len(ip_by_domain)} resolved", flush=True)
@@ -768,7 +772,7 @@ def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter:
                             "country_code": country, "website_url": f"https://{domain}",
                             "next_check_at": next_check, "last_checked_at": now, "attempt_count": count})
 
-    domain_store.batch_update_domains(updates)
+    domain_store.batch_update_domains(updates, label="geo:results")
     return {"geo_us": geo_us, "geo_non_us": geo_non_us, "geo_failed": geo_failed}
 
 
@@ -859,6 +863,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
         due = due[:site_limit]
     total = len(due)
     print(f"[domain_scanner] Site phase: {total} domains ({SITE_WORKERS} workers)", flush=True)
+    domain_store.heartbeat(phase=f"site:classify ({total})")
 
     matched: list[Filing] = []
     completed = 0
@@ -871,7 +876,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
 
     def _flush_site_updates():
         if pending_updates:
-            domain_store.batch_update_domains(pending_updates)
+            domain_store.batch_update_domains(pending_updates, label="site:results")
             pending_updates.clear()
 
     deadline = runtime_deadline()
@@ -880,6 +885,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
         futures = {executor.submit(_check_domain, row, profile): row for row in due}
         for future in _as_completed_until(futures, deadline):
             completed += 1
+            domain_store.heartbeat()  # each classified site is progress
             result = future.result()
             row = result["row"]
             basics = result.get("basics", {})  # per-crawl dataset fields, persisted on every row
@@ -1058,6 +1064,7 @@ def scan_new_domains(
     if profile.bypass_keyword_filter:
         keyword_filter = False
     domain_store.init_db()
+    domain_store.heartbeat(phase="import:expire+requeue")
     expired = domain_store.expire_stale()
     if expired:
         print(f"[domain_scanner] Expired {expired} stale tracked domains", flush=True)

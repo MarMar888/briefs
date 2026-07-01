@@ -95,6 +95,10 @@ def main():
 
         domain_store.init_db()
         run_id = domain_store.start_run(source=args.domain_source, industry=profile.name)
+        # Watchdog: aborts the process if the run goes silent for WATCHDOG_STALL_MINUTES,
+        # turning a hang (like the geo-write stall that pinned run #84 for 3h+) into a fast,
+        # clean CI failure instead of burning to the job's hard timeout.
+        domain_store.start_watchdog(run_id)
         print(f"[run] Scanning newly registered domains from {args.domain_source} (last {args.days} days, limit {args.domain_limit})...")
         try:
             domain_filings, scan_stats = scan_new_domains(
@@ -122,6 +126,7 @@ def main():
                 domain_store.finish_run(run_id, matched=0, downloaded=0, inserted=0, expired=0, error=str(exc))
             except Exception as fin_exc:
                 print(f"[run] Could not record run failure (DB unreachable): {fin_exc}", flush=True)
+            domain_store.stop_watchdog()
             raise
 
 
@@ -140,11 +145,14 @@ def main():
                   "the standalone Lead Audit job will drain it", flush=True)
         else:
             print(f"[run] Running deep-search audit on newly matched leads (limit {inline_audit_limit})...")
+            domain_store.heartbeat(phase="enrich:inline-audit")
             run_enrichment(limit=inline_audit_limit, profile=profile)
 
+        domain_store.heartbeat(phase="alert")
         unalerted = domain_store.get_unalerted_matches(industry=profile.name)
         if unalerted and send_match_alerts(unalerted, profile=profile):
             domain_store.mark_alert_sent([match["domain"] for match in unalerted])
+        domain_store.stop_watchdog()
 
     results = []
     for i, filing in enumerate(filings, 1):
