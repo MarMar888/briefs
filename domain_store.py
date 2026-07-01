@@ -1,6 +1,7 @@
 import functools
 import os
 import sqlite3
+import threading
 import time
 from contextlib import closing
 from datetime import datetime, timedelta
@@ -170,6 +171,12 @@ _RUNS_MIGRATIONS = [
     "ALTER TABLE pipeline_runs ADD COLUMN keyword_matched INTEGER",
     "ALTER TABLE pipeline_runs ADD COLUMN pipeline_version TEXT",
     "ALTER TABLE pipeline_runs ADD COLUMN industry TEXT DEFAULT 'outdoor'",
+    # Liveness telemetry: the phase the run is in and the last time it made forward
+    # progress. Lets you answer "is run N alive or hung, and where?" with one query
+    # (SELECT id, industry, current_phase, last_progress_at FROM pipeline_runs WHERE
+    # status='running') instead of reverse-engineering it from domains.last_checked_at.
+    "ALTER TABLE pipeline_runs ADD COLUMN current_phase TEXT",
+    "ALTER TABLE pipeline_runs ADD COLUMN last_progress_at TEXT",
 ]
 
 _MIGRATIONS = [
@@ -256,12 +263,49 @@ def _is_transient_db_error(exc: Exception) -> bool:
     return any(marker in msg for marker in _TRANSIENT_DB_MARKERS)
 
 
+# A stalled Turso connection blocks in a socket read with NO exception and NO timeout of
+# its own — so #24's transient-retry (which only fires on errors that RAISE) never sees it.
+# That silent hang is what pinned run #84 for 3h+ on a single geo-phase write. We cap every
+# DB op with a wall-clock timeout in a daemon thread: on stall we raise TimeoutError, whose
+# message ("timed out") is already a transient marker, so it flows straight back into the
+# retry loop below and reopens a fresh connection. The abandoned daemon thread dies with the
+# process. 0 disables the cap (local debugging).
+_DB_OP_TIMEOUT = float(os.environ.get("DB_OP_TIMEOUT_SECONDS", "45"))
+
+
+def _call_with_timeout(fn, timeout: float):
+    if timeout <= 0:
+        return fn()
+    box: dict = {}
+
+    def _runner():
+        try:
+            box["value"] = fn()
+        except Exception as exc:  # surface in the calling thread
+            box["error"] = exc
+
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise TimeoutError(
+            f"DB op timed out after {timeout:.0f}s — stalled connection abandoned"
+        )
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
 def _execute_with_retry(fn, retries: int | None = None, backoff: float = 1.0):
-    """Run fn(), retrying transient Hrana/libSQL connection blips with capped backoff."""
+    """Run fn(), retrying transient Hrana/libSQL connection blips with capped backoff.
+    Each attempt is wall-clock bounded (see _call_with_timeout) so a silent stall becomes
+    a retryable error instead of hanging the run forever."""
     attempts = retries or _DB_RETRY_ATTEMPTS
     for attempt in range(attempts):
         try:
-            return fn()
+            result = _call_with_timeout(fn, _DB_OP_TIMEOUT)
+            _touch()  # a completed DB op is forward progress — feed the watchdog
+            return result
         except Exception as exc:
             if not _is_transient_db_error(exc) or attempt == attempts - 1:
                 raise
@@ -280,6 +324,119 @@ def _resilient(fn):
     def wrapper(*args, **kwargs):
         return _execute_with_retry(lambda: fn(*args, **kwargs))
     return wrapper
+
+
+# ---------------------------------------------------------------------------
+# Liveness: heartbeat + watchdog
+#
+# The pipeline used to go silent for hours with no way to tell "hung vs slow" short of
+# querying domains.last_checked_at by hand. Now every phase and every DB op marks progress
+# on an in-process monotonic clock; a watchdog thread aborts the process if that clock goes
+# stale, and heartbeat() mirrors the current phase into pipeline_runs so liveness is also
+# queryable from the DB.
+# ---------------------------------------------------------------------------
+_hb_lock = threading.Lock()
+_last_activity = time.monotonic()
+_current_phase = "init"
+_current_run_id: int | None = None
+
+_watchdog_stop: threading.Event | None = None
+_WATCHDOG_STALL_LIMIT = float(os.environ.get("WATCHDOG_STALL_MINUTES", "20")) * 60
+_WATCHDOG_POLL_SECONDS = 30.0
+
+
+def _touch() -> None:
+    """Mark forward progress on the in-process liveness clock (what the watchdog reads)."""
+    global _last_activity
+    with _hb_lock:
+        _last_activity = time.monotonic()
+
+
+def seconds_since_activity() -> float:
+    with _hb_lock:
+        return time.monotonic() - _last_activity
+
+
+def heartbeat(phase: str | None = None, run_id: int | None = None) -> None:
+    """Record forward progress. Bumps the in-process clock and, when a run is known,
+    best-effort writes current_phase + last_progress_at to pipeline_runs so run liveness
+    is queryable without log access. Never raises — telemetry must not crash a run."""
+    global _current_phase, _current_run_id
+    _touch()
+    if phase is not None:
+        _current_phase = phase
+    if run_id is not None:
+        _current_run_id = run_id
+    rid = _current_run_id
+    if rid is None:
+        return
+    now = utcnow().isoformat()
+    ph = _current_phase
+
+    def _run():
+        with closing(_db()) as conn:
+            conn.execute(
+                "UPDATE pipeline_runs SET current_phase=?, last_progress_at=? WHERE id=?",
+                (ph, now, rid),
+            )
+            conn.commit()
+
+    try:
+        _execute_with_retry(_run)
+    except Exception as exc:
+        print(f"[domain_store] heartbeat write failed (non-fatal): {exc}", flush=True)
+
+
+def _mark_run_stalled(run_id: int, phase: str) -> None:
+    now = utcnow().isoformat()
+    with closing(_db()) as conn:
+        conn.execute(
+            "UPDATE pipeline_runs SET status='error', finished_at=?, error=?, "
+            "current_phase=?, last_progress_at=? WHERE id=?",
+            (now, f"watchdog: stalled in phase '{phase}'", phase, now, run_id),
+        )
+        conn.commit()
+
+
+def start_watchdog(run_id: int | None = None) -> None:
+    """Start a daemon that aborts the process if no progress is made for
+    WATCHDOG_STALL_MINUTES. This is the backstop that turns a silent hang into a fast,
+    clean CI failure instead of burning to the job's hard timeout. Set the env var to 0
+    to disable (local runs)."""
+    global _watchdog_stop, _current_run_id
+    if _WATCHDOG_STALL_LIMIT <= 0:
+        return
+    if run_id is not None:
+        _current_run_id = run_id
+    _touch()
+    _watchdog_stop = threading.Event()
+    stop = _watchdog_stop
+
+    def _loop():
+        while not stop.wait(_WATCHDOG_POLL_SECONDS):
+            idle = seconds_since_activity()
+            if idle >= _WATCHDOG_STALL_LIMIT:
+                phase = _current_phase
+                print(
+                    f"[watchdog] no progress for {idle/60:.1f} min in phase '{phase}' — "
+                    f"aborting (stall limit {_WATCHDOG_STALL_LIMIT/60:.0f} min). A DB op or "
+                    f"network call hung; failing fast instead of burning the CI budget.",
+                    flush=True,
+                )
+                rid = _current_run_id
+                if rid is not None:
+                    try:
+                        _call_with_timeout(lambda: _mark_run_stalled(rid, phase), 20)
+                    except Exception:
+                        pass
+                os._exit(1)
+
+    threading.Thread(target=_loop, daemon=True, name="pipeline-watchdog").start()
+
+
+def stop_watchdog() -> None:
+    if _watchdog_stop is not None:
+        _watchdog_stop.set()
 
 
 @_resilient
@@ -540,15 +697,24 @@ def update_domain(domain: str, **fields) -> None:
     _execute_with_retry(_run)
 
 
-def batch_update_domains(updates: list, chunk_size: int = 100) -> None:
+def batch_update_domains(updates: list, chunk_size: int = 100, label: str = "batch-write") -> None:
     """Write a list of domain updates in batches, one commit per chunk.
 
     Each item in `updates` must be a dict with a ``domain`` key plus the
     fields to set.  All updates in a chunk share one connection and one
     commit, cutting Turso round-trips from O(n) to O(n/chunk_size).
+
+    `label` tags the timing logs so a stall here is attributable to a phase (this is the
+    call that silently hung run #84 for 3h+ — it now logs each chunk and heartbeats, and
+    every chunk is timeout-bounded via _execute_with_retry).
     """
     now = utcnow().isoformat()
-    for i in range(0, len(updates), chunk_size):
+    total = len(updates)
+    if not total:
+        return
+    chunks = (total + chunk_size - 1) // chunk_size
+    started = time.monotonic()
+    for idx, i in enumerate(range(0, total, chunk_size), 1):
         chunk = updates[i : i + chunk_size]
 
         def _run(chunk=chunk):
@@ -566,6 +732,9 @@ def batch_update_domains(updates: list, chunk_size: int = 100) -> None:
                 conn.commit()
 
         _execute_with_retry(_run)
+        heartbeat()  # each committed chunk is progress — keep the watchdog satisfied
+    print(f"[domain_store] {label}: wrote {total} rows in {chunks} chunk(s), "
+          f"{time.monotonic()-started:.1f}s", flush=True)
 
 
 def start_run(source: str, industry: str = "outdoor") -> int:
@@ -575,9 +744,10 @@ def start_run(source: str, industry: str = "outdoor") -> int:
     def _run():
         with closing(_db()) as conn:
             cur = conn.execute(
-                "INSERT INTO pipeline_runs (started_at, source, status, pipeline_version, industry) "
-                "VALUES (?, ?, 'running', ?, ?)",
-                (now, source, get_version(), industry),
+                "INSERT INTO pipeline_runs (started_at, source, status, pipeline_version, "
+                "industry, current_phase, last_progress_at) "
+                "VALUES (?, ?, 'running', ?, ?, 'starting', ?)",
+                (now, source, get_version(), industry, now),
             )
             conn.commit()
             return cur.lastrowid
@@ -609,18 +779,21 @@ def finish_run(
 ) -> None:
     now = utcnow().isoformat()
     status = "error" if error else "done"
+    phase = "error" if error else "done"
 
     def _run():
         with closing(_db()) as conn:
             conn.execute(
                 "UPDATE pipeline_runs "
-                "SET finished_at=?, status=?, downloaded=?, tld_filtered=?, keyword_filtered=?, "
+                "SET current_phase=?, last_progress_at=?, "
+                "finished_at=?, status=?, downloaded=?, tld_filtered=?, keyword_filtered=?, "
                 "random_inserted=?, inserted=?, geo_us=?, geo_non_us=?, geo_failed=?, "
                 "site_processed=?, matched=?, site_not_outdoor=?, site_pending_retry=?, "
                 "random_processed=?, random_matched=?, keyword_processed=?, keyword_matched=?, "
                 "expired=?, error=? "
                 "WHERE id=?",
                 (
+                    phase, now,
                     now, status,
                     downloaded, tld_filtered, keyword_filtered,
                     random_inserted, inserted,
