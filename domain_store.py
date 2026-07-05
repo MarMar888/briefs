@@ -472,6 +472,8 @@ def upsert_new(domains: list[str], source_date: str, random_sample: bool = False
     the life of the row (classify/enrich never change it), so a row is only ever
     advanced by its own vertical's pipeline.
     """
+    if not domains:
+        return 0
     now_dt = utcnow()
     now = now_dt.isoformat()
     expires_at = (now_dt + timedelta(days=TRACKING_DAYS)).isoformat()
@@ -483,22 +485,37 @@ def upsert_new(domains: list[str], source_date: str, random_sample: bool = False
     name_priority = None
     if prioritize:
         from geo_gate import name_priority
-    def _run():
-        inserted = 0
-        with closing(_db()) as conn:
-            for domain in domains:
-                pr = name_priority(domain) if prioritize else 0
-                cur = conn.execute(
-                    "INSERT OR IGNORE INTO domains "
-                    "(domain, source_date, first_seen_at, last_seen_at, expires_at, status, random_sample, found_version, industry, priority) "
-                    "VALUES (?, ?, ?, ?, ?, 'new', ?, ?, ?, ?)",
-                    (domain, source_date, now, now, expires_at, rs_flag, version, industry, pr),
-                )
-                inserted += cur.rowcount
-            conn.commit()
-        return inserted
 
-    return _execute_with_retry(_run)
+    # Batch the insert into multi-row statements, one bounded round-trip per chunk. The
+    # firehose (minnesota, name-filter off, no domain-limit) hands this ~100k domains; the
+    # old row-at-a-time loop was ~100k serial Turso round-trips in a single op, which blew
+    # past the per-op timeout and failed the whole import. 9 bound params/row → 100 rows is
+    # 900 params, safely under SQLite's conservative 999-variable ceiling.
+    UPSERT_CHUNK = 100
+    row_sql = "(?, ?, ?, ?, ?, 'new', ?, ?, ?, ?)"
+    inserted = 0
+    for start in range(0, len(domains), UPSERT_CHUNK):
+        chunk = domains[start : start + UPSERT_CHUNK]
+        params: list = []
+        for domain in chunk:
+            pr = name_priority(domain) if prioritize else 0
+            params.extend((domain, source_date, now, now, expires_at, rs_flag, version, industry, pr))
+        values_clause = ", ".join(row_sql for _ in chunk)
+        sql = (
+            "INSERT OR IGNORE INTO domains "
+            "(domain, source_date, first_seen_at, last_seen_at, expires_at, status, "
+            "random_sample, found_version, industry, priority) VALUES " + values_clause
+        )
+
+        def _run(sql=sql, params=params):
+            with closing(_db()) as conn:
+                cur = conn.execute(sql, params)
+                conn.commit()
+                return cur.rowcount
+
+        inserted += _execute_with_retry(_run) or 0
+        heartbeat()  # each committed chunk is progress — keep the watchdog satisfied
+    return inserted
 
 
 def _rows_to_dicts(cursor) -> list[dict]:
