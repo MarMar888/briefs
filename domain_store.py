@@ -506,8 +506,11 @@ def upsert_new(domains: list[str], source_date: str, random_sample: bool = False
             "(domain, source_date, first_seen_at, last_seen_at, expires_at, status, "
             "random_sample, found_version, industry, priority) VALUES " + values_clause
         )
+        # libsql (Turso) requires a tuple, not a list, for bound params — sqlite3 accepts
+        # either, which is why this only shows up against the real DB.
+        param_tuple = tuple(params)
 
-        def _run(sql=sql, params=params):
+        def _run(sql=sql, params=param_tuple):
             with closing(_db()) as conn:
                 cur = conn.execute(sql, params)
                 conn.commit()
