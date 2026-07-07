@@ -344,12 +344,29 @@ _watchdog_stop: threading.Event | None = None
 _WATCHDOG_STALL_LIMIT = float(os.environ.get("WATCHDOG_STALL_MINUTES", "20")) * 60
 _WATCHDOG_POLL_SECONDS = 30.0
 
+# 2026-07-06: the construction backfill leg went silent for 88min inside a
+# batch_update_domains write and NEITHER the per-op _call_with_timeout thread NOR this
+# in-process watchdog fired. Root cause: libsql_experimental is a PyO3/Rust extension; a
+# stalled connection blocks inside it without releasing the GIL, which starves every other
+# Python thread in the process — including the ones this file spins up to detect exactly
+# that. A same-process thread can't watch a process that won't schedule threads. So we also
+# drop a plain timestamp file on every touch, cheap enough to call constantly, that an
+# external OS-level watcher (outside this interpreter, immune to the GIL) can poll and
+# kill -9 the process on. Set by the CI step; a no-op locally when unset.
+_HEARTBEAT_FILE = os.environ.get("HEARTBEAT_FILE")
+
 
 def _touch() -> None:
     """Mark forward progress on the in-process liveness clock (what the watchdog reads)."""
     global _last_activity
     with _hb_lock:
         _last_activity = time.monotonic()
+    if _HEARTBEAT_FILE:
+        try:
+            with open(_HEARTBEAT_FILE, "w") as f:
+                f.write(str(time.time()))
+        except OSError:
+            pass
 
 
 def seconds_since_activity() -> float:
