@@ -709,7 +709,7 @@ def _run_geo_phase(defer_site_days: int = 0, geo_limit: int = 0, keyword_filter:
     """Run geo phase. Returns counts: geo_us, geo_non_us, geo_failed."""
     if profile is None:
         profile = get_profile()
-    due = domain_store.get_due(["new", "geo_pending"], industry=profile.name)
+    due = domain_store.get_due(["new", "geo_pending"], industry=profile.name, limit=geo_limit)
     if not due:
         return {"geo_us": 0, "geo_non_us": 0, "geo_failed": 0}
 
@@ -856,7 +856,7 @@ def _run_site_phase(filing_date: str, site_limit: int = 0, rescrape_days: int = 
                     profile=None) -> tuple[list[Filing], dict]:
     if profile is None:
         profile = get_profile()
-    due = domain_store.get_due(["site_pending"], industry=profile.name)
+    due = domain_store.get_due(["site_pending"], industry=profile.name, limit=site_limit)
     if not due:
         return [], {"random_processed": 0, "random_matched": 0, "keyword_processed": 0, "keyword_matched": 0}
     if site_limit > 0:

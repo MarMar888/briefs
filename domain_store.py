@@ -466,6 +466,20 @@ def init_db() -> None:
                 conn.execute(sql)
             except Exception:
                 pass  # column/object already exists
+        # Index for get_due: serves WHERE (industry, status) + ORDER BY (priority DESC,
+        # first_seen_at) so a single-status query walks ~LIMIT rows instead of scanning
+        # and temp-b-tree-sorting the whole backlog (the MN firehose grew `new` to ~480k).
+        # The priority DESC direction must be baked into the index or the ORDER BY still
+        # forces a sort. On a huge pre-existing table the build can exceed the DB-op
+        # timeout — prod was indexed out-of-band once; on fresh/empty DBs it's instant.
+        try:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_domains_due2 "
+                "ON domains(industry, status, priority DESC, first_seen_at)"
+            )
+            conn.execute("DROP INDEX IF EXISTS idx_domains_due")  # superseded ASC-priority index
+        except Exception:
+            pass
         conn.execute("DROP VIEW IF EXISTS matched_domains")
         conn.execute(_MATCHED_VIEW)
         # Label, don't kill: recover any leads stranded in the retired terminal
@@ -549,29 +563,51 @@ def _rows_to_dicts(cursor) -> list[dict]:
 
 
 @_resilient
-def get_due(statuses: list[str], industry: str | None = None) -> list[dict]:
+def get_due(statuses: list[str], industry: str | None = None, limit: int = 0) -> list[dict]:
     """Return domains with given statuses that are due for processing.
 
     When `industry` is given, only that vertical's rows are returned so a run never
     advances another vertical's leads through its own (wrong) prompt/keywords.
+
+    `limit` (>0) caps how many rows come back — and, crucially, how many cross the wire
+    from Turso. The caller already discards everything past its geo/site cap, so pulling
+    the whole backlog was pure waste: the minnesota firehose grew `new` to ~480k rows and
+    an unbounded get_due tried to stream them all, blowing past the 45s DB-op timeout.
+    With a limit we query each status separately so the
+    (industry, status, priority DESC, first_seen_at) index serves ORDER BY + LIMIT by
+    walking ~`limit` rows — a two-value `status IN (...)` would instead force a temp-b-tree
+    sort of the entire backlog. Results are merged and re-sorted so the caller still sees a
+    single priority-then-oldest ordering.
     """
     now = utcnow().isoformat()
-    ph = ",".join("?" * len(statuses))
-    sql = (
-        f"SELECT * FROM domains WHERE status IN ({ph}) "
-        "AND (expires_at IS NULL OR expires_at > ?) "
-        "AND (next_check_at IS NULL OR next_check_at <= ?)"
-    )
-    params: list = [*statuses, now, now]
-    if industry is not None:
-        sql += " AND industry = ?"
-        params.append(industry)
-    # Priority first (minnesota queue prioritization; 0 for every other vertical, so
-    # this is a no-op there), then oldest-first for a stable, fair drain order.
-    sql += " ORDER BY priority DESC, first_seen_at"
-    with closing(_db()) as conn:
-        cursor = conn.execute(sql, tuple(params))
-        return _rows_to_dicts(cursor)
+
+    def _query(status_subset: list[str], lim: int) -> list[dict]:
+        ph = ",".join("?" * len(status_subset))
+        sql = (
+            f"SELECT * FROM domains WHERE status IN ({ph}) "
+            "AND (expires_at IS NULL OR expires_at > ?) "
+            "AND (next_check_at IS NULL OR next_check_at <= ?)"
+        )
+        params: list = [*status_subset, now, now]
+        if industry is not None:
+            sql += " AND industry = ?"
+            params.append(industry)
+        # Priority first (minnesota queue prioritization; 0 for every other vertical, so
+        # this is a no-op there), then oldest-first for a stable, fair drain order.
+        sql += " ORDER BY priority DESC, first_seen_at"
+        if lim and lim > 0:
+            sql += " LIMIT ?"
+            params.append(lim)
+        with closing(_db()) as conn:
+            return _rows_to_dicts(conn.execute(sql, tuple(params)))
+
+    if limit and limit > 0 and len(statuses) > 1:
+        merged: list[dict] = []
+        for status in statuses:
+            merged.extend(_query([status], limit))
+        merged.sort(key=lambda r: (-(r.get("priority") or 0), r.get("first_seen_at") or ""))
+        return merged[:limit]
+    return _query(statuses, limit)
 
 
 @_resilient
