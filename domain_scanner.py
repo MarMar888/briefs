@@ -1132,10 +1132,31 @@ def scan_new_domains(
 
         keyword_total = len(keyword_matched_domains)
 
-        # Insert keyword-matched domains (subject to limit)
+        # Order the intake, then bound it.
+        # 1) For the geo-gated firehose vertical (minnesota) there is no domain-NAME
+        #    keyword filter, so front-load domains whose NAME hints the target geo (MN
+        #    place tokens, see geo_gate.name_priority). Shuffle first for a random tiebreak
+        #    within a priority tier, then stable-sort hint-domains to the front.
+        # 2) Cap the pending backlog: the firehose would otherwise grow new/geo_pending
+        #    unbounded (~115k rows/run for minnesota). Once the vertical already holds
+        #    BACKLOG_CAP pending rows we stop ingesting and just drain; because hint
+        #    domains are sorted first, the cap drops the least-relevant tail.
         random.shuffle(keyword_matched_domains)
+        if profile.require_content_geo_gate:
+            from geo_gate import name_priority
+            keyword_matched_domains.sort(key=lambda sd_d: name_priority(sd_d[1]), reverse=True)
         if limit > 0:
             keyword_matched_domains = keyword_matched_domains[:limit]
+
+        backlog_cap = int(os.environ.get("BACKLOG_CAP", "800000"))
+        if backlog_cap > 0 and keyword_matched_domains:
+            pending = domain_store.count_pending(industry=profile.name)
+            room = max(0, backlog_cap - pending)
+            if len(keyword_matched_domains) > room:
+                dropped = len(keyword_matched_domains) - room
+                keyword_matched_domains = keyword_matched_domains[:room]
+                print(f"[domain_scanner] Backlog cap {backlog_cap:,}: {pending:,} pending → "
+                      f"room for {room:,}, dropping {dropped:,} lower-priority domains", flush=True)
 
         domains_by_date: dict[str, list[str]] = {}
         for source_date, domain in keyword_matched_domains:

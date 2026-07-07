@@ -689,6 +689,20 @@ def get_matches_to_reaudit(limit: int = 0, stale_only: bool = True,
 
 
 @_resilient
+def count_pending(industry: str | None = None) -> int:
+    """Count rows still awaiting geo/site processing (status new or geo_pending).
+    Backs the ingest backlog cap. The idx_domains_due2 (industry, status, ...) index
+    makes this a cheap index scan even on a 600k+ table."""
+    sql = "SELECT COUNT(*) FROM domains WHERE status IN ('new', 'geo_pending')"
+    params: list = []
+    if industry is not None:
+        sql += " AND industry = ?"
+        params.append(industry)
+    with closing(_db()) as conn:
+        return conn.execute(sql, tuple(params)).fetchone()[0]
+
+
+@_resilient
 def get_unalerted_matches(industry: str | None = None) -> list[dict]:
     """Return matched domains that are ready to alert.
 
