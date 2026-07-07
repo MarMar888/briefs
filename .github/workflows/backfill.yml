@@ -66,6 +66,8 @@ jobs:
           LIMIT="${{ github.event.inputs.site_limit || matrix.site_limit }}"
           GEO_LIMIT="${{ github.event.inputs.geo_limit || matrix.geo_limit }}"
           echo "[backfill] vertical=${{ matrix.vertical }} geo-limit=$GEO_LIMIT site-limit=$LIMIT"
+          export HEARTBEAT_FILE="$RUNNER_TEMP/heartbeat-${{ matrix.vertical }}"
+          touch "$HEARTBEAT_FILE"
           python run.py \
             --domains-only \
             --skip-domain-import \
@@ -73,7 +75,34 @@ jobs:
             ${{ matrix.keywords_flag }} \
             --geo-limit "$GEO_LIMIT" \
             --site-limit "$LIMIT" \
-            --vertical ${{ matrix.vertical }}
+            --vertical ${{ matrix.vertical }} &
+          PY_PID=$!
+
+          # OS-level backstop for the in-process watchdog (domain_store.start_watchdog).
+          # That watchdog is a Python thread, which needs the GIL to notice a stall — but
+          # 2026-07-06 showed a stuck libsql_experimental (Rust/PyO3) call can hold the GIL
+          # forever, starving every thread including the watchdog itself. This loop runs as
+          # a separate OS process, so it kills the run on staleness even when Python is
+          # completely wedged.
+          (
+            STALL_LIMIT_SECONDS=1320  # 22min: a bit past the in-process 20min watchdog
+            while kill -0 "$PY_PID" 2>/dev/null; do
+              sleep 30
+              last=$(stat -c %Y "$HEARTBEAT_FILE" 2>/dev/null || echo 0)
+              now=$(date +%s)
+              if [ $((now - last)) -ge "$STALL_LIMIT_SECONDS" ]; then
+                echo "[watchdog-os] no heartbeat for ${STALL_LIMIT_SECONDS}s — killing stuck pipeline (pid $PY_PID)"
+                kill -9 "$PY_PID" 2>/dev/null
+                break
+              fi
+            done
+          ) &
+          WATCHER_PID=$!
+
+          wait "$PY_PID"
+          STATUS=$?
+          kill "$WATCHER_PID" 2>/dev/null || true
+          exit "$STATUS"
         env:
           SITE_WORKERS: ${{ matrix.site_workers }}
           # Exit cleanly ~12 min before the 100-min hard cap (commit progress, abandon
