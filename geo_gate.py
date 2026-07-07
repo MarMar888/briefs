@@ -97,15 +97,38 @@ def gate_pass(text: str, areas: tuple[ServiceArea, ...]) -> bool:
     return bool(find_service_area_zips(text, areas)) or metro_phone(text)
 
 
-_PRIORITY_STRONG = ("minneapolis", "stpaul", "saintpaul", "twincities")
+# Distinctive Minnesota place tokens that hint a Twin Cities–metro (or greater-MN)
+# business when they appear in a concatenated domain label. Curated to be reasonably
+# unambiguous: generic English words that happen to be MN city names (Savage, Crystal,
+# Buffalo, Austin, Hampton, Jackson…) are deliberately left out to avoid false hints.
+# This is the "MN keyword" set — grow it to surface more in-area leads. Reorder-only:
+# a hit just front-loads the domain in the queue (get_due orders by priority DESC), it
+# never excludes anything, so an occasional false positive is cheap.
+_MN_PLACE_TOKENS = (
+    # Twin Cities core + statewide tags
+    "minneapolis", "stpaul", "saintpaul", "twincities", "twincity", "minnesota",
+    "mpls", "msp",
+    # Distinctive metro suburbs
+    "minnetonka", "edina", "wayzata", "eaganmn", "eagan", "bloomington", "edenprairie",
+    "maplegrove", "maplewood", "brooklynpark", "brooklyncenter", "coonrapids",
+    "applevalley", "shakopee", "chanhassen", "chaska", "roseville", "woodbury",
+    "stillwater", "burnsville", "lakeville", "hopkins", "goldenvalley", "robbinsdale",
+    "columbiaheights", "fridley", "newbrighton", "shoreview", "whitebearlake",
+    "forestlake", "cottagegrove", "invergrove", "priorlake", "rosemount", "farmington",
+    "elkriver", "champlin", "oakdale", "mendotaheights", "southstpaul", "vadnaisheights",
+    "mahtomedi", "anoka", "waconia", "hutchinson", "northfield", "hastings",
+    # Greater MN metros
+    "duluth", "rochestermn", "stcloud", "mankato", "moorhead", "winona", "bemidji",
+    "brainerd", "alexandriamn", "faribault", "owatonna", "willmar",
+)
 
 
 def name_priority(domain: str) -> int:
-    """1 if the domain NAME hints Twin Cities (front-load it in the queue), else 0.
-    Reorder-only — it never excludes a domain, just changes processing order so metro
+    """1 if the domain NAME hints Minnesota (front-load it in the queue), else 0.
+    Reorder-only — it never excludes a domain, just changes processing order so in-area
     leads surface first. Concatenated labels make this approximate, which is fine."""
     label = (domain or "").rsplit(".", 1)[0].lower()
-    if any(tok in label for tok in _PRIORITY_STRONG):
+    if any(tok in label for tok in _MN_PLACE_TOKENS):
         return 1
     if (label.startswith("mn") or label.endswith("mn")
             or label.startswith("mn-") or label.endswith("-mn") or "-mn-" in label):
