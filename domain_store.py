@@ -456,11 +456,28 @@ def stop_watchdog() -> None:
         _watchdog_stop.set()
 
 
+# Bump this whenever a statement is added to _MIGRATIONS / _RUNS_MIGRATIONS or the index
+# set / view definition changes, so init_db re-applies them once. Between bumps init_db
+# takes a fast 3-round-trip path and skips the ~60 ALTER/INDEX/VIEW statements it used to
+# fire on EVERY invocation — those round-trips alone blew the 45s DB-op timeout whenever
+# Turso latency rose (the recurring init_db failure), independent of any table scan.
+_SCHEMA_VERSION = 1
+
+
 @_resilient
 def init_db() -> None:
     with closing(_db()) as conn:
         conn.execute(_SCHEMA)
         conn.execute(_RUNS_SCHEMA)
+        # Schema-version gate via a meta table (NOT PRAGMA user_version — Turso/libsql does
+        # not persist that over its HTTP protocol, though local SQLite does). One cheap
+        # SELECT; if the schema is current we skip the ~60 ALTER/INDEX/VIEW round-trips.
+        conn.execute("CREATE TABLE IF NOT EXISTS schema_meta (version INTEGER NOT NULL)")
+        row = conn.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()
+        schema_version = row[0] if row else 0
+        if schema_version >= _SCHEMA_VERSION:
+            conn.commit()  # schema already current — skip the ~60 migration round-trips
+            return
         for sql in _MIGRATIONS + _RUNS_MIGRATIONS:
             try:
                 conn.execute(sql)
@@ -493,6 +510,8 @@ def init_db() -> None:
         # NOTE: the one-time 'audit_rejected' → 'matched' recovery UPDATE was removed here.
         # It scanned the whole table on EVERY init_db (a read-row-quota drain and the cause
         # of init_db timing out on the grown table); that legacy status is long drained.
+        conn.execute("DELETE FROM schema_meta")
+        conn.execute("INSERT INTO schema_meta (version) VALUES (?)", (_SCHEMA_VERSION,))  # fast path next time
         conn.commit()
 
 
