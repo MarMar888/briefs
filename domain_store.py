@@ -472,26 +472,27 @@ def init_db() -> None:
         # The priority DESC direction must be baked into the index or the ORDER BY still
         # forces a sort. On a huge pre-existing table the build can exceed the DB-op
         # timeout — prod was indexed out-of-band once; on fresh/empty DBs it's instant.
+        # Indexes that keep the hot per-run maintenance queries off a full-table SCAN —
+        # critical now that the table is ~600k rows and every scan reads (and bills against
+        # Turso's read-row quota) the whole thing. idx_domains_due2 serves get_due; the two
+        # below let expire_stale (expires_at) and requeue_rescrapes (next_check_at) seek the
+        # handful of due rows instead of scanning everything. On a huge pre-existing table a
+        # build can exceed the DB-op timeout — prod is indexed out-of-band; instant on fresh DBs.
         try:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_domains_due2 "
                 "ON domains(industry, status, priority DESC, first_seen_at)"
             )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_domains_expires ON domains(expires_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_domains_next_check ON domains(next_check_at)")
             conn.execute("DROP INDEX IF EXISTS idx_domains_due")  # superseded ASC-priority index
         except Exception:
             pass
         conn.execute("DROP VIEW IF EXISTS matched_domains")
         conn.execute(_MATCHED_VIEW)
-        # Label, don't kill: recover any leads stranded in the retired terminal
-        # 'audit_rejected' state back into matched with a disqualified verdict, so
-        # the audit filter suppresses them instead of deleting them. Idempotent.
-        try:
-            conn.execute(
-                "UPDATE domains SET status = 'matched', audit_verdict = 'disqualified' "
-                "WHERE status = 'audit_rejected'"
-            )
-        except Exception:
-            pass
+        # NOTE: the one-time 'audit_rejected' → 'matched' recovery UPDATE was removed here.
+        # It scanned the whole table on EVERY init_db (a read-row-quota drain and the cause
+        # of init_db timing out on the grown table); that legacy status is long drained.
         conn.commit()
 
 

@@ -12,22 +12,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Per-vertical flags: minnesota runs the firehose with NO --keywords (the name
-        # filter can't apply), its own limits, and more site workers. outdoor/construction
-        # keep their original behavior (--keywords, --domain-limit 3000 = run.py default).
+        # Scaled down to minnesota only (2026-07-07): outdoor + construction paused to
+        # stay under Turso's read-row quota. minnesota runs the firehose with NO
+        # --keywords (the name filter can't apply), its own limits, and more site workers.
         include:
-          - vertical: outdoor
-            keywords_flag: "--keywords"
-            domain_limit: "3000"
-            geo_limit: "2000"
-            site_limit: "200"
-            site_workers: "8"
-          - vertical: construction
-            keywords_flag: "--keywords"
-            domain_limit: "3000"
-            geo_limit: "2000"
-            site_limit: "200"
-            site_workers: "8"
           - vertical: minnesota
             keywords_flag: ""
             domain_limit: "0"
