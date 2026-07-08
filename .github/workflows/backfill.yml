@@ -2,8 +2,9 @@ name: Backfill Queue
 
 on:
   schedule:
-    # Runs every 4 hours — chips through geo + site_pending queue until empty
-    - cron: "0 */4 * * *"
+    # Runs every 12 hours — chips through geo + site_pending queue (cut from every 4h
+    # as part of the 2026-07-07 scale-down to reduce Turso read-row usage).
+    - cron: "0 */12 * * *"
   workflow_dispatch:
     inputs:
       site_limit:
@@ -22,20 +23,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # minnesota MUST run without --keywords (it has none): if it inherited --keywords
-        # the geo phase would reject the entire MN queue as "no keyword match in domain
-        # name". Per-vertical flags + a profile-level backstop both enforce this.
+        # Scaled down to minnesota only (2026-07-07) — outdoor + construction paused to
+        # stay under Turso's read-row quota. minnesota MUST run without --keywords (it has
+        # none): --keywords would reject the whole MN queue as "no keyword match".
         include:
-          - vertical: outdoor
-            keywords_flag: "--keywords"
-            geo_limit: "1000"
-            site_limit: "1000"
-            site_workers: "8"
-          - vertical: construction
-            keywords_flag: "--keywords"
-            geo_limit: "1000"
-            site_limit: "1000"
-            site_workers: "8"
           - vertical: minnesota
             keywords_flag: ""
             geo_limit: "6000"
